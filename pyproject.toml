@@ -7,7 +7,12 @@ authors = [
     { name = "Pablo", email = "pabloflc137@gmail.com" }
 ]
 requires-python = ">=3.14"
-dependencies = []
+dependencies = [
+    "numpy>=2.5.4",
+    "pandas>=3.1.0",
+    "streamlit>=1.66.1",
+    "streamlit-echarts>=0.7.0",
+]
 
 [project.scripts]
 litmetrics = "litmetrics:main"
@@ -15,3 +20,18 @@ litmetrics = "litmetrics:main"
 [build-system]
 requires = ["uv_build>=0.12.21,<0.13.0"]
 build-backend = "uv_build"
+
+[dependency-groups]
+dev = [
+    "faker>=40.43.0",
+    "pre-commit>=4.7.0",
+    "pytest>=9.1.1",
+    "ruff>=0.17.2",
+]
+
+[tool.ruff]
+line-length = 100
+target-version = "py314"
+
+[tool.ruff.lint]
+select = ["E", "F", "W", "I", "B", "UP", "SIM", "N", "PD", "NPY", "RUF"]
