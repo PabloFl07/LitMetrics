@@ -60,7 +60,7 @@ def _load(source: Source) -> None:
     options = detect_options(source.data)
     dataset_id = compute_dataset_id(source.data, options)
     try:
-        dataset = cache.load_csv(source, options)
+        dataset = cache.load_csv(dataset_id, source, options)
     except ReadError as e:
         # The upload is not marked as processed, so the error stays visible on later reruns.
         st.error(str(e))
