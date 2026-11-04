@@ -13,3 +13,5 @@ wheels/
 # Project specific
 data/
 drafts/
+.claude/
+.agents/
