@@ -9,13 +9,13 @@ Status: Load and Profile work. Home, Visualization, Statistics and Settings are 
 
 ```bash
 uv sync                                       # install (Python 3.14, deps pinned in uv.lock)
-uv run streamlit run src/litmetrics/app.py    # run the app
+uv run litmetrics                             # run the app (args go to streamlit run)
 uv run pytest -q                              # all tests (~2 s)
 uv run ruff format src tests                  # format
 uv run ruff check src tests                   # lint
 ```
 
-- `uv run litmetrics` does NOT start the app: the script entry point is still a stub.
+- `uv run litmetrics` = `streamlit run src/litmetrics/app.py` (entry point in `__init__.py`).
 - Lint only `src` and `tests`. `drafts/` is not part of the package and fails ruff on purpose.
 - Add dependencies with `uv add <pkg>` (`uv add --dev <pkg>` for tools). Never edit `uv.lock`.
 - Before saying a change is done, run the `verify` skill (format, lint, tests, page smoke tests).
