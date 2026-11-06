@@ -1,0 +1,668 @@
+"""Column table of the Profile page: what each column holds, described for its semantic type.
+
+Two levels, as in the column table proof of concept (drafts/column_table_poc):
+- ``column_overview``: one short row per column (type, missing, distinct values, a one-line
+  summary and the bars of a small chart);
+- per-type tables (``numeric_stats``, ``categorical_stats``, ``datetime_stats``,
+  ``text_stats``), each with only the measures that make sense for its type, and
+  ``column_detail`` with the chart data of one column.
+
+Cost on large datasets (docs/performance.md):
+- Counts are exact; quantiles, histograms, skewness, text lengths and the outliers drawn come
+  from a sample of the non-missing values of each column (``sample_values``, R-P2). Results
+  computed on a sample say so in the page.
+- Missing and distinct values come from ``profile.BaseProfile`` instead of being counted again
+  (R-P1).
+- Date columns are already ``datetime64`` (``schema.apply_schema``): nothing here parses
+  dates (R-L2).
+"""
+
+from collections.abc import Iterable, Mapping, Sequence
+from dataclasses import dataclass, field
+from itertools import pairwise
+
+import numpy as np
+import pandas as pd
+from pandas.api import types as ptypes
+
+from litmetrics.core.profile import BaseProfile, sample
+from litmetrics.core.schema import Schema, SemanticType
+
+# Semantic types described by each per-type table.
+NUMERIC_TYPES = (SemanticType.NUMERIC,)
+CATEGORICAL_TYPES = (SemanticType.CATEGORICAL, SemanticType.BOOLEAN)
+DATE_TYPES = (SemanticType.DATETIME,)
+TEXT_TYPES = (SemanticType.TEXT, SemanticType.IDENTIFIER)
+
+# Bars of the small distribution drawn in each row of the overview.
+OVERVIEW_BINS = 16
+# Bars of the histograms of a single column.
+DETAIL_BINS = 30
+# Categories listed for a single column.
+TOP_K = 10
+# Tukey's fences: values beyond TUKEY_K * IQR from the quartiles are outliers.
+TUKEY_K = 1.5
+# A category with a smaller share (%) of the non-missing values is rare.
+RARE_PCT = 1.0
+# Percentiles of the numeric table (quartiles included).
+PERCENTILES = (0.05, 0.25, 0.5, 0.75, 0.95)
+# Characters of the example value shown in the text table.
+EXAMPLE_WIDTH = 60
+
+NUMERIC_STATS_COLUMNS = [
+    "column", "count", "mean", "std", "cv", "min", "p5", "q1", "median", "q3", "p95", "max",
+    "iqr", "whisker_low", "whisker_high", "outliers", "outliers_pct", "zeros", "negatives",
+    "infinite", "skew", "kurtosis", "shape",
+]  # fmt: skip
+CATEGORICAL_STATS_COLUMNS = [
+    "column", "unique", "mode", "mode_pct", "top", "rare", "variants", "variant_example",
+]  # fmt: skip
+DATETIME_STATS_COLUMNS = [
+    "column", "min", "max", "span_days", "frequency", "unparsed", "future",
+]  # fmt: skip
+TEXT_STATS_COLUMNS = [
+    "column", "semantic_type", "len_min", "len_mean", "len_max", "blank", "unique_pct",
+    "repeated", "example",
+]  # fmt: skip
+
+
+@dataclass(frozen=True)
+class Bars:
+    """Data of a small bar chart, already aggregated.
+
+    Attributes:
+        counts: Height of each bar.
+        labels: Label of each bar: a value, or a range such as ``"10 to 12.5"``.
+        per_value: True if each bar is one value (short labels), False if it is a range.
+    """
+
+    counts: tuple[int, ...] = ()
+    labels: tuple[str, ...] = ()
+    per_value: bool = False
+
+
+@dataclass(frozen=True, eq=False)
+class ColumnDetail:
+    """Chart data of one column, for the inspector of the Columns tab.
+
+    Attributes:
+        bars: Main chart: values or histogram (numeric), most common values (categorical),
+            rows over time (dates) or length of the values (text).
+        outliers: Numeric only: the most extreme outliers, to draw as dots.
+        variants: Categorical only: values written in different ways (see ``variant_groups``).
+        examples: Text only: a few values with their length (``value``, ``length``).
+        other_values: Categorical only: distinct values left out of ``bars``.
+        other_rows: Categorical only: rows with those values.
+    """
+
+    bars: Bars = field(default_factory=Bars)
+    outliers: tuple[float, ...] = ()
+    variants: tuple[tuple[str, ...], ...] = ()
+    examples: pd.DataFrame | None = None
+    other_values: int = 0
+    other_rows: int = 0
+
+
+def columns_of(schema: Schema, kinds: Iterable[SemanticType]) -> tuple[str, ...]:
+    """Names of the columns whose semantic type is one of ``kinds``, in dataset order."""
+    wanted = set(kinds)
+    return tuple(c.name for c in schema.columns if c.semantic_type in wanted)
+
+
+# Shared helpers
+
+
+def histogram(values: np.ndarray, bins: int, low: float, high: float) -> tuple[list[int], list]:
+    """Counts and bin edges of ``values`` between ``low`` and ``high`` (values outside ignored)."""
+    if values.size == 0:
+        return [], []
+    if low == high:
+        # A single value: one bar, so the chart is not empty.
+        return [int(np.count_nonzero(values == low))], [low, high]
+    counts, edges = np.histogram(values, bins=bins, range=(low, high))
+    return [int(c) for c in counts], [float(e) for e in edges]
+
+
+def sample_values(series: pd.Series, n: int) -> pd.Series:
+    """Up to ``n`` random non-missing values of a column (fixed seed).
+
+    Missing values are dropped before sampling, not after: a sample of rows of a sparse column
+    could keep one value or none, and every measure computed on it would be wrong.
+    """
+    return sample(series.dropna(), n)
+
+
+def value_labels(values: Iterable[float]) -> tuple[str, ...]:
+    """Short labels for distinct numbers, with as many digits as needed to tell them apart.
+
+    ``,.4g`` alone writes 123451 and 123452 as "1.235e+05" both.
+    """
+    values = list(values)
+    for digits in (4, 6, 10):
+        labels = tuple(f"{v:,.{digits}g}" for v in values)
+        if len(set(labels)) == len(labels):
+            return labels
+    return tuple(repr(v) for v in values)
+
+
+def finite_values(series: pd.Series) -> pd.Series:
+    """Finite, non-missing values of a numeric column, as float."""
+    values = series.astype("float64")
+    return values[np.isfinite(values.to_numpy())]
+
+
+def value_counts(series: pd.Series) -> pd.Series:
+    """Rows of each distinct value, as text, the most frequent first. Counted on every row."""
+    counts = series.value_counts()
+    # A category column also lists the categories that never appear.
+    counts = counts[counts > 0]
+    if not ptypes.is_string_dtype(counts.index):
+        # Values that look the same as text (1 and "1") are one value for the user.
+        counts = counts.groupby(counts.index.astype(str)).sum()
+    return counts.sort_values(ascending=False, kind="stable")
+
+
+# Numeric
+
+
+def numeric_stats(df: pd.DataFrame, columns: Sequence[str], sample_rows: int) -> pd.DataFrame:
+    """Position, spread, outliers and shape of every numeric column in ``columns``.
+
+    Missing values are ignored and infinite ones are counted apart (``infinite``) and then
+    ignored too, so they do not turn the mean into ``inf``.
+
+    Quantiles, skewness and kurtosis come from ``sample_values`` of each column; the rest (counts,
+    mean, min, max, outliers) is exact. The *whiskers* are the most extreme values that are not
+    outliers by Tukey's rule (inside ``[Q1 - 1.5 IQR, Q3 + 1.5 IQR]``): the range of the column
+    without its outliers, the same one a boxplot draws.
+    """
+    if not columns:
+        return pd.DataFrame(columns=NUMERIC_STATS_COLUMNS)
+
+    raw = df[list(columns)].astype("float64")
+    finite = np.isfinite(raw)
+    infinite = (raw.notna() & ~finite).sum()
+    num = raw.where(finite)
+    count = num.notna().sum()
+
+    # One sample per column, of its finite values: the fences of the exact outlier count come
+    # from it, so it must not lose the values of sparse columns.
+    parts = [sample_values(num[name], sample_rows) for name in columns]
+    q = pd.DataFrame(
+        {i: part.quantile(list(PERCENTILES)) for i, part in enumerate(parts)}
+    ).set_axis(num.columns, axis=1)
+    q1, median, q3 = q.loc[0.25], q.loc[0.5], q.loc[0.75]
+    iqr = q3 - q1
+    is_outlier = num.lt(q1 - TUKEY_K * iqr) | num.gt(q3 + TUKEY_K * iqr)
+    inside = num.where(~is_outlier)
+    outliers = is_outlier.sum()
+
+    mean = num.mean()
+    std = num.std()
+    skew = pd.Series([part.skew() for part in parts], index=num.columns)
+    return pd.DataFrame(
+        {
+            "column": list(columns),
+            "count": count.to_numpy(),
+            "mean": mean.to_numpy(),
+            "std": std.to_numpy(),
+            # Coefficient of variation: spread relative to the size of the values.
+            "cv": (std / mean.abs()).where(mean != 0).to_numpy(),
+            "min": num.min().to_numpy(),
+            "p5": q.loc[0.05].to_numpy(),
+            "q1": q1.to_numpy(),
+            "median": median.to_numpy(),
+            "q3": q3.to_numpy(),
+            "p95": q.loc[0.95].to_numpy(),
+            "max": num.max().to_numpy(),
+            "iqr": iqr.to_numpy(),
+            "whisker_low": inside.min().to_numpy(),
+            "whisker_high": inside.max().to_numpy(),
+            "outliers": outliers.to_numpy(),
+            "outliers_pct": (outliers / count.where(count > 0) * 100).fillna(0.0).to_numpy(),
+            "zeros": num.eq(0).sum().to_numpy(),
+            "negatives": num.lt(0).sum().to_numpy(),
+            "infinite": infinite.to_numpy(),
+            "skew": skew.to_numpy(),
+            "kurtosis": np.array([part.kurt() for part in parts], dtype=float),
+            "shape": [shape_label(s) for s in skew],
+        }
+    )
+
+
+def with_unparsed(table: pd.DataFrame, unparsed: Mapping[str, int]) -> pd.DataFrame:
+    """``table`` (a per-type table) plus ``unparsed``: values of each column that were not
+    numbers or dates when the file was loaded (``LoadedDataset.unparsed``), now missing.
+    """
+    return table.assign(unparsed=[int(unparsed.get(name, 0)) for name in table["column"]])
+
+
+def shape_label(skew: float) -> str:
+    """Plain-language reading of the skewness of a distribution."""
+    if pd.isna(skew):
+        return ""
+    size = abs(skew)
+    if size < 0.5:
+        return "Symmetric"
+    side = "right" if skew > 0 else "left"
+    if size < 1:
+        return f"Moderate {side} skew"
+    return f"Strong {side} skew"
+
+
+def numeric_bars(
+    series: pd.Series, stats: pd.Series, unique: int, bins: int, sample_rows: int
+) -> Bars:
+    """Bars of the distribution of a numeric column.
+
+    With at most ``bins`` distinct values (counts, ratings, codes), one bar per value, outliers
+    included, counted on every row. Otherwise a histogram of the sample between the whiskers:
+    outliers are left out so they do not flatten the bars.
+
+    Args:
+        stats: The row of ``numeric_stats`` for this column.
+        unique: Distinct values of the column (from ``BaseProfile``), to choose between both.
+    """
+    if unique <= bins:
+        counts = finite_values(series).value_counts().sort_index()
+        return Bars(tuple(int(c) for c in counts), value_labels(counts.index), True)
+    values = sample(finite_values(series), sample_rows).to_numpy()
+    heights, edges = histogram(values, bins, stats["whisker_low"], stats["whisker_high"])
+    labels = [f"{a:,.4g} to {b:,.4g}" for a, b in pairwise(edges)]
+    return Bars(tuple(heights), tuple(labels))
+
+
+def outlier_values(series: pd.Series, stats: pd.Series, limit: int, sample_rows: int) -> list:
+    """Up to ``limit`` outliers of the sample, the most extreme first (R-P2, R-V2)."""
+    values = sample(finite_values(series), sample_rows)
+    outside = values[(values < stats["whisker_low"]) | (values > stats["whisker_high"])]
+    distance = (outside - stats["median"]).abs().sort_values(ascending=False, kind="stable")
+    return [float(v) for v in outside.loc[distance.index[:limit]]]
+
+
+# Categorical and boolean
+
+
+def top_values(series: pd.Series, k: int) -> pd.DataFrame:
+    """The ``k`` most frequent values, plus one "(other N values)" row for the rest.
+
+    Columns: ``value``, ``count`` and ``pct`` (share of the non-missing values).
+    """
+    counts = value_counts(series)
+    total = counts.sum()
+    top = counts.head(k)
+    table = pd.DataFrame({"value": top.index.astype(str), "count": top.to_numpy()})
+    if len(counts) > k:
+        other = pd.DataFrame(
+            {"value": [f"(other {len(counts) - k} values)"], "count": [counts.iloc[k:].sum()]}
+        )
+        table = pd.concat([table, other], ignore_index=True)
+    table["pct"] = table["count"] / total * 100 if total else 0.0
+    return table
+
+
+def top_bars(series: pd.Series, k: int) -> tuple[Bars, int, int]:
+    """Bars of the ``k`` most frequent values, and the distinct values and rows left out.
+
+    Unlike ``top_values``, the rest is not a bar: it usually adds up to far more rows than any
+    single value and would flatten the others.
+    """
+    counts = value_counts(series)
+    top, rest = counts.head(k), counts.iloc[k:]
+    bars = Bars(tuple(int(c) for c in top), tuple(str(v) for v in top.index), True)
+    return bars, len(rest), int(rest.sum())
+
+
+def variant_groups(series: pd.Series) -> list[list[str]]:
+    """Values that only differ in case or surrounding spaces ("Madrid", "madrid ").
+
+    Each group lists its spellings, the most frequent first. Groups with more rows first.
+    """
+    return _variants(value_counts(series))
+
+
+def _variants(counts: pd.Series) -> list[list[str]]:
+    """``variant_groups`` from the output of ``value_counts``: loops over values, not rows."""
+    normalized = counts.index.str.strip().str.casefold()
+    groups: dict[str, list[str]] = {}
+    totals: dict[str, int] = {}
+    for value, key, count in zip(counts.index, normalized, counts.to_numpy(), strict=True):
+        groups.setdefault(key, []).append(value)
+        totals[key] = totals.get(key, 0) + int(count)
+    found = [key for key, values in groups.items() if len(values) > 1]
+    found.sort(key=lambda key: totals[key], reverse=True)
+    return [groups[key] for key in found]
+
+
+def categorical_stats(df: pd.DataFrame, columns: Sequence[str]) -> pd.DataFrame:
+    """Distinct values, most common one, rare categories and spelling variants of each column.
+
+    Everything is counted on every row: one ``value_counts`` per column, and the rest is
+    computed from it.
+    """
+    rows = []
+    for name in columns:
+        counts = value_counts(df[name])
+        total = counts.sum()
+        share = counts / total * 100 if total else counts.astype(float)
+        variants = _variants(counts)
+        rows.append(
+            {
+                "column": name,
+                "unique": len(counts),
+                "mode": counts.index[0] if total else None,
+                "mode_pct": float(share.iloc[0]) if total else float("nan"),
+                "top": ", ".join(f"{v} ({p:.0f}%)" for v, p in share.head(3).items()),
+                "rare": int((share < RARE_PCT).sum()),
+                "variants": len(variants),
+                "variant_example": " / ".join(repr(v) for v in variants[0]) if variants else "",
+            }
+        )
+    return pd.DataFrame(rows, columns=CATEGORICAL_STATS_COLUMNS)
+
+
+# Dates
+
+
+def datetime_values(series: pd.Series) -> pd.Series:
+    """Non-missing values of a date column. Empty if the column is not ``datetime64``.
+
+    Columns are converted when the file is loaded (``schema.apply_schema``), so a date column
+    that is still text here could not be read as dates; it is not parsed again (R-L2).
+    """
+    if not ptypes.is_datetime64_any_dtype(series):
+        return pd.Series([], dtype="datetime64[ns]")
+    return series.dropna()
+
+
+def datetime_stats(
+    df: pd.DataFrame,
+    columns: Sequence[str],
+    unparsed: Mapping[str, int],
+    now: pd.Timestamp | None = None,
+) -> pd.DataFrame:
+    """First and last date, span, usual spacing between dates and suspicious values.
+
+    Args:
+        unparsed: Values of each column that were not dates when the file was loaded
+            (``LoadedDataset.unparsed``).
+        now: Dates after it are counted in ``future``. Timezone-naive, like the dates (local
+            clock time). ``None`` is the current time; a cached caller passes it, so the count
+            does not stay frozen at the moment it was cached.
+    """
+    now = pd.Timestamp.now() if now is None else now
+    rows = []
+    for name in columns:
+        values = datetime_values(df[name])
+        has_values = not values.empty
+        first, last = (values.min(), values.max()) if has_values else (pd.NaT, pd.NaT)
+        rows.append(
+            {
+                "column": name,
+                "min": first,
+                "max": last,
+                "span_days": (last - first).days if has_values else None,
+                "frequency": _frequency(values),
+                "unparsed": int(unparsed.get(name, 0)),
+                "future": int((values > now).sum()),
+            }
+        )
+    return pd.DataFrame(rows, columns=DATETIME_STATS_COLUMNS)
+
+
+def _frequency(values: pd.Series) -> str:
+    """Usual spacing between consecutive distinct dates, in words. Exact, on every row."""
+    # Gaps between sorted dates; repeated dates give a gap of 0 and are dropped. Same result
+    # as np.unique + diff, but np.unique took 6 s on 7.3 M dates and the sort 0.9 s.
+    gaps = np.diff(np.sort(values.to_numpy()))
+    gaps = gaps[gaps > np.timedelta64(0, "s")]
+    if len(gaps) < 2:
+        return ""
+    days = np.median(gaps) / np.timedelta64(1, "D")
+    for low, high, label in (
+        (0, 0.99, "Sub-daily"),
+        (0.99, 1.5, "Daily"),
+        (6, 8, "Weekly"),
+        (27, 32, "Monthly"),
+        (88, 93, "Quarterly"),
+        (360, 370, "Yearly"),
+    ):
+        if low <= days < high:
+            return label
+    return f"Every ~{days:.0f} days"
+
+
+def datetime_bars(series: pd.Series, bins: int, sample_rows: int) -> Bars:
+    """Rows over time: histogram of the sample between the first and the last date."""
+    values = datetime_values(series)
+    if values.empty:
+        return Bars()
+    # Exact bounds, so the chart spans the whole column; the heights come from the sample.
+    # pandas may store dates in s/ms/us: fix the unit so the integers are nanoseconds.
+    low = float(values.min().as_unit("ns").value)
+    high = float(values.max().as_unit("ns").value)
+    ns = sample(values, sample_rows).dt.as_unit("ns").astype("int64")
+    counts, edges = histogram(ns.to_numpy(), bins, low, high)
+    dates = [pd.Timestamp(int(e)) for e in edges]
+    labels = [f"{a:%Y-%m-%d} to {b:%Y-%m-%d}" for a, b in pairwise(dates)]
+    return Bars(tuple(counts), tuple(labels))
+
+
+# Text and identifiers
+
+
+def text_lengths(series: pd.Series) -> pd.Series:
+    """Characters of each non-missing value."""
+    return series.dropna().astype(str).str.len()
+
+
+def text_stats(
+    df: pd.DataFrame, columns: Sequence[str], schema: Schema, base: BaseProfile, sample_rows: int
+) -> pd.DataFrame:
+    """Length of the values, blank ones and repeats, for text and identifier columns.
+
+    Lengths come from ``sample_values`` of each column; blank values are exact, and distinct and
+    repeated values come from ``base`` (R-P1).
+    """
+    table = base.columns.set_index("column")
+    rows = []
+    for name in columns:
+        series = df[name]
+        lengths = text_lengths(sample_values(series, sample_rows))
+        has_values = not lengths.empty
+        rows.append(
+            {
+                "column": name,
+                "semantic_type": schema.type_of(name).value,
+                "len_min": int(lengths.min()) if has_values else None,
+                "len_mean": float(lengths.mean()) if has_values else float("nan"),
+                "len_max": int(lengths.max()) if has_values else None,
+                "blank": _count_blank(series),
+                "unique_pct": float(table.loc[name, "unique_pct"]),
+                "repeated": int(table.loc[name, "repeated"]),
+                "example": _first_non_blank(series),
+            }
+        )
+    return pd.DataFrame(rows, columns=TEXT_STATS_COLUMNS)
+
+
+def _count_blank(series: pd.Series) -> int:
+    """Values that are "" or only spaces: not missing for pandas, but with no information."""
+    if not ptypes.is_string_dtype(series):
+        # Numbers stored in an id column are never blank.
+        return 0
+    return int(series.dropna().astype(str).str.strip().eq("").sum())
+
+
+def _first_non_blank(series: pd.Series) -> str:
+    """First value with some text, cut to ``EXAMPLE_WIDTH`` characters. Stops at the first."""
+    for value in series.dropna():
+        text = str(value)
+        if text.strip():
+            return text if len(text) <= EXAMPLE_WIDTH else text[: EXAMPLE_WIDTH - 1] + "…"
+    return ""
+
+
+def text_bars(series: pd.Series, bins: int, sample_rows: int) -> Bars:
+    """Histogram of the length of the values, on the sample."""
+    return _length_bars(text_lengths(sample_values(series, sample_rows)), bins)
+
+
+def _length_bars(lengths: pd.Series, bins: int) -> Bars:
+    if lengths.empty:
+        return Bars()
+    counts, edges = histogram(lengths.to_numpy(), bins, float(lengths.min()), float(lengths.max()))
+    labels = [f"{a:.0f} to {b:.0f}" for a, b in pairwise(edges)]
+    return Bars(tuple(counts), tuple(labels))
+
+
+def text_examples(series: pd.Series, n: int) -> pd.DataFrame:
+    """``n`` random values (fixed seed) and their length, as ``value`` and ``length`` (R-P7)."""
+    # Pick first and convert after: converting a whole column to text is slow.
+    values = series.dropna()
+    picked = values.sample(min(n, len(values)), random_state=0).astype(str)
+    return pd.DataFrame({"value": picked.to_numpy(), "length": picked.str.len().to_numpy()})
+
+
+# One column
+
+
+def column_detail(
+    df: pd.DataFrame,
+    name: str,
+    kind: SemanticType,
+    *,
+    unique: int,
+    numeric: pd.DataFrame,
+    sample_rows: int,
+    outlier_limit: int,
+    n_examples: int,
+) -> ColumnDetail:
+    """Chart data of column ``name``, according to its semantic type ``kind``.
+
+    Args:
+        unique: Distinct values of the column (from ``BaseProfile``).
+        numeric: Output of ``numeric_stats``; only read for numeric columns.
+        outlier_limit: Most outliers returned, to keep the chart light.
+        n_examples: Example values returned for text and identifier columns.
+    """
+    series = df[name]
+    if kind in NUMERIC_TYPES:
+        stats = numeric.set_index("column").loc[name]
+        return ColumnDetail(
+            bars=numeric_bars(series, stats, unique, DETAIL_BINS, sample_rows),
+            outliers=tuple(outlier_values(series, stats, outlier_limit, sample_rows)),
+        )
+    if kind in CATEGORICAL_TYPES:
+        bars, other_values, other_rows = top_bars(series, TOP_K)
+        return ColumnDetail(
+            bars=bars,
+            variants=tuple(tuple(g) for g in variant_groups(series)),
+            other_values=other_values,
+            other_rows=other_rows,
+        )
+    if kind in DATE_TYPES:
+        return ColumnDetail(bars=datetime_bars(series, DETAIL_BINS, sample_rows))
+    return ColumnDetail(
+        bars=text_bars(series, DETAIL_BINS, sample_rows),
+        examples=text_examples(series, n_examples),
+    )
+
+
+# Overview
+
+
+def column_overview(
+    df: pd.DataFrame,
+    schema: Schema,
+    base: BaseProfile,
+    numeric: pd.DataFrame,
+    sample_rows: int,
+) -> pd.DataFrame:
+    """One short row per column: type, missing, distinct values, a summary and a distribution.
+
+    Columns: ``column``, ``semantic_type``, ``missing_pct``, ``unique_pct`` (from ``base``),
+    ``summary`` (a one-line description written for the type of the column) and
+    ``distribution`` (the bar heights of a small chart of its values):
+    - numeric: one bar per value if there are few, else histogram without outliers;
+    - date: histogram over time;
+    - categorical / boolean: frequency of the most common values;
+    - text: histogram of the length of the values;
+    - identifier: empty (every value is different, there is nothing to draw).
+
+    Args:
+        base: Output of ``profile.base_profile(df)``.
+        numeric: Output of ``numeric_stats`` for the numeric columns.
+    """
+    table = base.columns.set_index("column")
+    numeric = numeric.set_index("column")
+    rows = []
+    for column in schema.columns:
+        name, kind = column.name, column.semantic_type
+        stats = table.loc[name]
+        n_values = base.n_rows - int(stats["missing"])
+        summary, bars = _describe(
+            df[name], kind, n_values, int(stats["unique"]), numeric, sample_rows
+        )
+        rows.append(
+            {
+                "column": name,
+                "semantic_type": kind.value,
+                "missing_pct": float(stats["missing_pct"]),
+                "unique_pct": float(stats["unique_pct"]),
+                "summary": summary,
+                "distribution": list(bars.counts),
+            }
+        )
+    return pd.DataFrame(
+        rows,
+        columns=["column", "semantic_type", "missing_pct", "unique_pct", "summary", "distribution"],
+    )
+
+
+def _describe(
+    series: pd.Series,
+    kind: SemanticType,
+    n_values: int,
+    unique: int,
+    numeric: pd.DataFrame,
+    sample_rows: int,
+) -> tuple[str, Bars]:
+    """One-line summary and small chart of a column, for the overview."""
+    if n_values == 0:
+        return "No values", Bars()
+
+    if kind in NUMERIC_TYPES:
+        stats = numeric.loc[series.name]
+        if not stats["count"]:
+            return "No finite values", Bars()
+        text = (
+            f"{stats['whisker_low']:,.4g} to {stats['whisker_high']:,.4g}"
+            f" · median {stats['median']:,.4g}"
+        )
+        if stats["outliers"]:
+            text += f" · {stats['outliers']:,} outliers"
+        return text, numeric_bars(series, stats, unique, OVERVIEW_BINS, sample_rows)
+
+    if kind in CATEGORICAL_TYPES:
+        bars, _, _ = top_bars(series, TOP_K)
+        share = bars.counts[0] / n_values * 100
+        return f"Most common: {bars.labels[0]} ({share:.0f}%)", bars
+
+    if kind in DATE_TYPES:
+        values = datetime_values(series)
+        if values.empty:
+            return "No valid dates", Bars()
+        bars = datetime_bars(series, OVERVIEW_BINS, sample_rows)
+        return f"{values.min():%Y-%m-%d} to {values.max():%Y-%m-%d}", bars
+
+    if kind is SemanticType.TEXT:
+        lengths = text_lengths(sample_values(series, sample_rows))
+        text = f"{lengths.min()} to {lengths.max()} characters, {lengths.mean():.0f} on average"
+        return text, _length_bars(lengths, OVERVIEW_BINS)
+
+    # Identifier: the repeats follow from the distinct values, no need to look for them.
+    repeated = n_values - unique
+    if repeated:
+        return f"Key with {repeated:,} repeated values", Bars()
+    return "One distinct value per row", Bars()
