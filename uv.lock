@@ -296,6 +296,7 @@ source = { editable = "." }
 dependencies = [
     { name = "numpy" },
     { name = "pandas" },
+    { name = "pyarrow" },
     { name = "streamlit" },
     { name = "streamlit-echarts" },
 ]
@@ -312,6 +313,7 @@ dev = [
 requires-dist = [
     { name = "numpy", specifier = ">=2.5.4" },
     { name = "pandas", specifier = ">=3.1.0" },
+    { name = "pyarrow", specifier = ">=26.0.0" },
     { name = "streamlit", specifier = ">=1.66.1" },
     { name = "streamlit-echarts", specifier = ">=0.7.0" },
 ]
