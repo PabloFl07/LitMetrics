@@ -1,9 +1,9 @@
 """Load page: upload a CSV file, read it and show what was loaded.
 
 A new upload is processed once. Its read options (separator, encoding, header) are detected,
-the file is read through a cache keyed by its content and those options, and the result
-becomes the active dataset in the session state. The schema is only inferred when the content
-is new, so uploading the same file again keeps the current one.
+the file is read through a cache keyed by its content and those options, its columns are
+converted to the dtype of their semantic type (dates, categories), and the result becomes the
+active dataset in the session state. Uploading the same file again keeps the current one.
 
 On every other rerun nothing is read: the page only draws the active dataset. It stays there
 after the file is removed from the uploader or the user moves to another page. The page shows
@@ -18,7 +18,6 @@ import streamlit as st
 from litmetrics.config import LoadConfig
 from litmetrics.core.io.base import LoadedDataset, ReadError, Source, compute_dataset_id
 from litmetrics.core.io.sniffing import detect_options
-from litmetrics.core.schema import infer_schema
 from litmetrics.ui import cache, state
 
 
@@ -52,21 +51,22 @@ def _upload_source() -> Source | None:
 def _load(source: Source) -> None:
     """Read ``source`` and make it the active dataset. Show an error if it cannot be read.
 
-    Steps: skip if this upload was already processed, guess how to read it, read it (cached by
-    content), and store it. The schema is only inferred when the content is new.
+    Steps: skip if this upload was already processed, guess how to read it, read it and convert
+    its columns to their semantic types (cached by content), and store it. The schema only
+    replaces the current one when the content is new.
     """
     if not state.source_changed(source.source_id):
         return
     options = detect_options(source.data)
     dataset_id = compute_dataset_id(source.data, options)
     try:
-        dataset = cache.load_csv(dataset_id, source, options)
+        dataset, schema = cache.load_dataset(dataset_id, source, options)
     except ReadError as e:
         # The upload is not marked as processed, so the error stays visible on later reruns.
         st.error(str(e))
         return
     if state.set_dataset(dataset, dataset_id, source.source_id):
-        state.set_schema(infer_schema(dataset.df))
+        state.set_schema(schema)
 
 
 # COMPONENTS

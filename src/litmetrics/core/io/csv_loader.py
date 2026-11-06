@@ -1,8 +1,16 @@
-"""Read a CSV file into a LoadedDataset."""
+"""Read a CSV file into a LoadedDataset.
+
+The pyarrow engine is used first: it is about 3.7x faster than pandas' C reader (R-L1 in
+drafts/PERFORMANCe.md). When pyarrow cannot read a file (ragged rows, an option it does not
+support...), the file is read again with the C engine, which also gives the clearer error
+messages shown to the user.
+"""
 
 import io
+from typing import Literal
 
 import pandas as pd
+import pyarrow as pa
 
 from litmetrics.core.io.base import LoadedDataset, ReadError, Source
 from litmetrics.core.io.sniffing import SAMPLE_BYTES, CsvOptions
@@ -11,7 +19,7 @@ from litmetrics.core.io.sniffing import SAMPLE_BYTES, CsvOptions
 class CsvLoader:
     """``Loader`` for delimited text files (CSV, TSV, ...).
 
-    The options are not guessed here: they come from ``sniffing.``, so the
+    The options are not guessed here: they come from ``sniffing.detect_options``, so the
     caller can show them or, in the future, let the user change them.
     """
 
@@ -32,17 +40,12 @@ class CsvLoader:
             )
 
         try:
-            df = pd.read_csv(
-                io.BytesIO(source.data),
-                sep=options.separator,
-                encoding=options.encoding,
-                # header=None: pandas names the columns 0, 1, 2...; renamed below.
-                header=0 if options.has_header else None,
-                # Read the whole file before choosing each dtype. Otherwise pandas reads it in
-                # chunks and a column can end up with mixed types.
-                low_memory=False,
-            )
-        # The encoding was checked on the whole file, so this only happ4ens if parts of the
+            try:
+                df = _read(source.data, options, "pyarrow")
+            # ValueError covers pandas' ParserError and the options pyarrow does not support.
+            except ValueError, pa.ArrowException:
+                df = _read(source.data, options, "c")
+        # The encoding was checked on the whole file, so this only happens if parts of the
         # file use different encodings.
         except UnicodeDecodeError as e:
             raise ReadError(
@@ -59,3 +62,18 @@ class CsvLoader:
         if not options.has_header:
             df.columns = [f"column_{i}" for i in range(1, df.shape[1] + 1)]
         return LoadedDataset(df, name, options.separator, options.encoding)
+
+
+def _read(data: bytes, options: CsvOptions, engine: Literal["pyarrow", "c"]) -> pd.DataFrame:
+    """Parse ``data`` with one of pandas' engines. Errors are left to the caller."""
+    return pd.read_csv(
+        io.BytesIO(data),
+        engine=engine,
+        sep=options.separator,
+        encoding=options.encoding,
+        # header=None: pandas names the columns 0, 1, 2...; the caller renames them.
+        header=0 if options.has_header else None,
+        # C engine only (pyarrow rejects it): read the whole file before choosing each dtype.
+        # Otherwise pandas reads it in chunks and a column can end up with mixed types.
+        **({"low_memory": False} if engine == "c" else {}),
+    )
