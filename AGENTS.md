@@ -3,7 +3,7 @@
 Streamlit app to explore a dataset: load a CSV, check its quality, plot it with ECharts and run
 statistics. Flow of the user: Load → Profile → Visualization → Statistics.
 
-Status: Load and Profile work. Home, Visualization, Statistics and Settings are stubs.
+Status: Load and Profile work. Home and Visualization are stubs. Statistics has no page yet.
 
 ## Commands
 
@@ -30,16 +30,18 @@ src/litmetrics/
     io/base.py      Source, LoadedDataset, ReadError, Loader protocol, compute_dataset_id
     io/sniffing.py  Detects separator, encoding and header -> CsvOptions
     io/csv_loader.py
-    schema.py       Semantic type of each column (numeric, categorical, datetime, ...)
-    profile.py      Quality summary, column profile, missing values, correlation, issues
+    schema.py       Semantic type of each column, and conversion to its dtype at load time
+    profile.py      Base pass (missing, distinct, duplicates), sampling, correlation, issues
+    columns.py      Column table of Profile: overview, per-type tables, data of one column
   ui/             The only package that imports streamlit
     state.py        The ONLY module that touches st.session_state
-    cache.py        @st.cache_data wrappers around core functions
+    cache.py        Cache wrappers around core functions (load_dataset, Profile sections)
     charts.py       ECharts option builders: plain dicts, no streamlit, no streamlit_echarts
     echarts.py      (create when needed) the only module importing streamlit_echarts
     pages/          One module per page
 tests/core/       pytest, mirrors src/litmetrics/core
-tests/ui/         AppTest smoke tests of the pages
+tests/ui/         AppTest smoke tests of the pages and tests of ui/charts.py
+docs/             Reference docs: data-loading.md (Load flow), performance.md (rules R-*)
 drafts/           Design notes and plans (Spanish). Intent, not truth: the code wins
 ```
 
@@ -55,7 +57,11 @@ drafts/           Design notes and plans (Spanish). Intent, not truth: the code 
   it is cleared when a new dataset is loaded.
 - Cache wrappers in `ui/cache.py` take `dataset_id` first and the data as `_df` / `_source`
   (underscore = not hashed). Only call them with a `dataset_id` that matches the data.
-  Other arguments must be hashable: frozen dataclasses with tuples, not lists.
+  Other arguments must be hashable: frozen dataclasses with tuples, not lists. When columns are
+  left out of the data, pass `cache.view_id(dataset_id, skipped)` instead of `dataset_id`.
+- The loaded dataset is cached with `st.cache_resource` and shared, not copied: never modify it.
+- Code that touches every row (loading, profiling, charts of a whole column) follows the rules
+  in `docs/performance.md` and cites the rule it applies (`R-L2`, `R-C1`...).
 - Anything that becomes part of a cache key or of `compute_dataset_id` (options, schema, rules)
   is a `@dataclass(frozen=True)`.
 - User-facing errors from reading a file are `ReadError` with a message shown as is.
