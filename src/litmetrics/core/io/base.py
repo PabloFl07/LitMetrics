@@ -43,15 +43,16 @@ class LoadedDataset:
         name: Name of the original file.
         separator: Column separator used to read it.
         encoding: Text encoding used to read it.
-        unparsed_dates: For each date column stored as text in the file, how many of its values
-            could not be read as dates (they became missing when the column was converted).
+        unparsed: For each date or numeric column stored as text in the file, how many of its
+            values could not be read as dates or numbers (they became missing when the column
+            was converted).
     """
 
     df: pd.DataFrame
     name: str
     separator: str
     encoding: str
-    unparsed_dates: Mapping[str, int] = field(default_factory=dict)
+    unparsed: Mapping[str, int] = field(default_factory=dict)
 
     @property
     def n_rows(self) -> int:

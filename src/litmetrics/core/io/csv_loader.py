@@ -1,7 +1,7 @@
 """Read a CSV file into a LoadedDataset.
 
 The pyarrow engine is used first: it is about 3.7x faster than pandas' C reader (R-L1 in
-drafts/PERFORMANCe.md). When pyarrow cannot read a file (ragged rows, an option it does not
+docs/performance.md). When pyarrow cannot read a file (ragged rows, an option it does not
 support...), the file is read again with the C engine, which also gives the clearer error
 messages shown to the user.
 """
