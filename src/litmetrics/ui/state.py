@@ -8,8 +8,10 @@ State kept per browser session:
     dataset_id  Content hash of the active dataset (see ``compute_dataset_id``).
     source_id   Id of the last upload that was processed, to skip it on later reruns.
     schema      Semantic types of the active dataset. Cleared when the dataset changes.
+    skipped     Columns the user left out of the profile. Cleared when the dataset changes.
 """
 
+from collections.abc import Iterable
 from typing import Any
 
 import streamlit as st
@@ -23,6 +25,7 @@ _DATASET = "dataset"
 _DATASET_ID = "dataset_id"
 _SOURCE_ID = "source_id"
 _SCHEMA = "schema"
+_SKIPPED = "skipped_columns"
 
 # Widgets whose value depends on the columns of the dataset use this prefix,
 # so they are cleared when a new dataset is loaded.
@@ -48,6 +51,7 @@ def _defaults() -> dict[str, Any]:
         _DATASET_ID: None,
         _SOURCE_ID: None,
         _SCHEMA: None,
+        _SKIPPED: (),
     }
 
 
@@ -111,6 +115,18 @@ def get_dataset_id() -> str | None:
     return st.session_state[_DATASET_ID]
 
 
+def require_dataset_id() -> str:
+    """Id of the active dataset, for code that runs only when one is loaded.
+
+    Raises:
+        RuntimeError: No dataset is loaded.
+    """
+    dataset_id = st.session_state[_DATASET_ID]
+    if dataset_id is None:
+        raise RuntimeError("No dataset loaded")
+    return dataset_id
+
+
 # Schema
 
 
@@ -118,8 +134,32 @@ def get_schema() -> Schema | None:
     return st.session_state[_SCHEMA]
 
 
+def require_schema() -> Schema:
+    """Schema of the active dataset, for code that runs only when one is loaded.
+
+    Raises:
+        RuntimeError: No schema was set (the Load page sets it with the dataset).
+    """
+    schema = st.session_state[_SCHEMA]
+    if schema is None:
+        raise RuntimeError("No schema for the active dataset")
+    return schema
+
+
 def set_schema(schema: Schema) -> None:
     st.session_state[_SCHEMA] = schema
+
+
+# Columns left out of the profile
+
+
+def get_skipped_columns() -> tuple[str, ...]:
+    """Columns the user chose not to profile (phone numbers, codes...), in dataset order."""
+    return st.session_state[_SKIPPED]
+
+
+def set_skipped_columns(names: Iterable[str]) -> None:
+    st.session_state[_SKIPPED] = tuple(names)
 
 
 # Widgets
@@ -133,12 +173,18 @@ def widget_key(name: str) -> str:
     return WIDGET_PREFIX + name
 
 
+def widget_value(key: str) -> Any:
+    """Current value of widget ``key``, for its ``on_change`` callback."""
+    return st.session_state[key]
+
+
 # Internal helpers
 
 
 def _reset_dependent_state() -> None:
     """Clear everything derived from the active dataset."""
     st.session_state[_SCHEMA] = None
+    st.session_state[_SKIPPED] = ()
     # list(): the keys cannot be deleted while iterating over them.
     for key in list(st.session_state.keys()):
         if isinstance(key, str) and key.startswith(WIDGET_PREFIX):
