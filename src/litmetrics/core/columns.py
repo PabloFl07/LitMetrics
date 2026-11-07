@@ -74,11 +74,30 @@ class Bars:
         counts: Height of each bar.
         labels: Label of each bar: a value, or a range such as ``"10 to 12.5"``.
         per_value: True if each bar is one value (short labels), False if it is a range.
+        edges: Numeric columns only, to place a value on the chart (``bar_index``): the value
+            of each bar if ``per_value``, else the bin edges (one more than ``counts``).
     """
 
     counts: tuple[int, ...] = ()
     labels: tuple[str, ...] = ()
     per_value: bool = False
+    edges: tuple[float, ...] = ()
+
+
+def bar_index(bars: Bars, value: float) -> int | None:
+    """Position of the bar where ``value`` falls, or None if it is outside the chart.
+
+    With one bar per value, the bar of the closest value. Without ``edges``, always None.
+    """
+    if not bars.edges or pd.isna(value):
+        return None
+    edges = np.asarray(bars.edges)
+    if bars.per_value:
+        return int(np.abs(edges - value).argmin())
+    if not edges[0] <= value <= edges[-1]:
+        return None
+    # The last bin includes its right edge, as in np.histogram.
+    return int(min(np.searchsorted(edges, value, side="right") - 1, len(bars.counts) - 1))
 
 
 @dataclass(frozen=True, eq=False)
@@ -265,11 +284,16 @@ def numeric_bars(
     """
     if unique <= bins:
         counts = finite_values(series).value_counts().sort_index()
-        return Bars(tuple(int(c) for c in counts), value_labels(counts.index), True)
+        return Bars(
+            tuple(int(c) for c in counts),
+            value_labels(counts.index),
+            per_value=True,
+            edges=tuple(float(v) for v in counts.index),
+        )
     values = sample(finite_values(series), sample_rows).to_numpy()
     heights, edges = histogram(values, bins, stats["whisker_low"], stats["whisker_high"])
     labels = [f"{a:,.4g} to {b:,.4g}" for a, b in pairwise(edges)]
-    return Bars(tuple(heights), tuple(labels))
+    return Bars(tuple(heights), tuple(labels), edges=tuple(edges))
 
 
 def outlier_values(series: pd.Series, stats: pd.Series, limit: int, sample_rows: int) -> list:

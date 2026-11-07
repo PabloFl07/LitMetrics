@@ -76,6 +76,10 @@ _NUMERIC_DEFAULT_GROUPS = ["Position", "Outliers"]
 _ROW_PX = 35
 _HEADER_PX = 38
 _CHART_HEIGHT = "240px"
+# Height of the histogram / boxplot of the numeric column inspector.
+_INSPECT_CHART_HEIGHT = "300px"
+# Material icon of each chart of the numeric column inspector.
+_NUMERIC_CHART_ICONS = {"Histogram": "bar_chart", "Boxplot": "candlestick_chart"}
 
 # Labels, formats and explanations of every measure of the numeric table.
 _NUMERIC_CONFIG: dict[str, Any] = {
@@ -412,47 +416,21 @@ def _inspect_numeric(name: str, stats: pd.Series, detail: cols.ColumnDetail) -> 
     )
     _metric(skew, "Skewness", f"{stats['skew']:+.2f}", stats["shape"] or None)
 
-    box, hist = st.columns(2)
-    with box:
-        st.markdown("**Boxplot**")
-        caption = (
-            f"Box: Q1 to Q3. Whiskers: {_num(stats['whisker_low'])} to "
-            f"{_num(stats['whisker_high'])}. Dots: outliers."
-        )
-        option = charts.boxplot_options(
-            name,
-            (
-                float(stats["whisker_low"]),
-                float(stats["q1"]),
-                float(stats["median"]),
-                float(stats["q3"]),
-                float(stats["whisker_high"]),
-            ),
-            list(detail.outliers),
-            (float(stats["min"]), float(stats["max"])),
-            _CFG.box_zoom_ratio,
-        )
-        if "dataZoom" in option:
-            caption += " Zoomed on the box: drag the slider to reach the farthest outliers."
-        st.caption(caption)
-        st_echarts(option, height="230px", key=f"profile_box_{name}")
-    with hist:
-        bars = detail.bars
-        if bars.per_value:
-            st.markdown("**Values**")
-            st.caption("Few distinct values: one bar per value, outliers included.")
-        else:
-            st.markdown("**Histogram**")
-            st.caption(
-                "Between the whiskers: outliers are left out so they do not flatten the bars."
-            )
-        st_echarts(
-            charts.histogram_options(
-                list(bars.labels), list(bars.counts), show_labels=bars.per_value
-            ),
-            height="230px",
-            key=f"profile_hist_{name}",
-        )
+    bars = detail.bars
+    chart = st.segmented_control(
+        "Chart",
+        list(_NUMERIC_CHART_ICONS),
+        default="Histogram",
+        format_func=lambda c: f":material/{_NUMERIC_CHART_ICONS[c]}: {c}",
+        label_visibility="collapsed",
+        # One key for every column: the chosen chart stays when another column is inspected.
+        key=state.widget_key("inspect_numeric_chart"),
+    )
+    # Clicking the selected option again deselects it: fall back to the histogram.
+    if chart == "Boxplot":
+        _boxplot(name, stats, detail)
+    else:
+        _histogram(name, stats, bars)
 
     # One card per group, side by side; they wrap to new rows on narrow screens.
     with st.expander("All measures"), st.container(horizontal=True, gap="small"):
@@ -471,6 +449,64 @@ def _inspect_numeric(name: str, stats: pd.Series, detail: cols.ColumnDetail) -> 
                             help=_NUMERIC_CONFIG[key].get("help"),
                         )
                         st.markdown(f"**{_format_stat(key, stats[key])}**", width="content")
+
+
+def _numeric_chart_key(name: str) -> str:
+    """Key shared by the histogram and the boxplot of column ``name``.
+
+    With one key, switching chart updates the same component instead of removing it and
+    mounting another: the page does not shrink for a moment, so the scroll does not jump.
+    """
+    return f"profile_numeric_{name}"
+
+
+def _histogram(name: str, stats: pd.Series, bars: cols.Bars) -> None:
+    """Histogram (or one bar per value) with lines at the median and the mean."""
+    if bars.per_value:
+        st.caption("Few distinct values: one bar per value, outliers included.")
+    else:
+        st.caption("Between the whiskers: outliers are left out so they do not flatten the bars.")
+    marks = [
+        charts.Mark(label, index, _num(stats[key]))
+        for label, key in (("Median", "median"), ("Mean", "mean"))
+        if (index := cols.bar_index(bars, stats[key])) is not None
+    ]
+    st_echarts(
+        charts.histogram_options(
+            list(bars.labels), list(bars.counts), show_labels=bars.per_value, marks=marks
+        ),
+        height=_INSPECT_CHART_HEIGHT,
+        key=_numeric_chart_key(name),
+    )
+
+
+def _boxplot(name: str, stats: pd.Series, detail: cols.ColumnDetail) -> None:
+    """Horizontal boxplot with the outliers as dots and a line at the mean."""
+    option = charts.boxplot_options(
+        name,
+        (
+            float(stats["whisker_low"]),
+            float(stats["q1"]),
+            float(stats["median"]),
+            float(stats["q3"]),
+            float(stats["whisker_high"]),
+        ),
+        list(detail.outliers),
+        (float(stats["min"]), float(stats["max"])),
+        _CFG.box_zoom_ratio,
+        marks=[
+            charts.Mark(label, float(stats[key]), _num(stats[key]))
+            for label, key in (("Median", "median"), ("Mean", "mean"))
+        ],
+    )
+    caption = (
+        f"Box: Q1 to Q3, split at the median. Whiskers: {_num(stats['whisker_low'])} to "
+        f"{_num(stats['whisker_high'])}. Dots: outliers."
+    )
+    if "dataZoom" in option:
+        caption += " Zoomed on the box: drag the slider to reach the farthest outliers."
+    st.caption(caption)
+    st_echarts(option, height=_INSPECT_CHART_HEIGHT, key=_numeric_chart_key(name))
 
 
 def _inspect_categorical(name: str, stats: pd.Series) -> None:
