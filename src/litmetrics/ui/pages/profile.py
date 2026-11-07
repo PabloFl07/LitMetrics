@@ -66,7 +66,7 @@ _VIEWS: dict[str, tuple[tuple[SemanticType, ...], str]] = {
 _NUMERIC_GROUPS: dict[str, list[str]] = {
     "Position": ["min", "p5", "q1", "median", "q3", "p95", "max"],
     "Spread": ["mean", "std", "cv", "iqr"],
-    "Outliers": ["whisker_low", "whisker_high", "outliers", "outliers_pct"],
+    "Outliers": ["whisker_low", "whisker_high", "outliers_label"],
     "Special values": ["count", "zeros", "negatives", "infinite", "unparsed"],
     "Shape": ["skew", "kurtosis", "shape"],
 }
@@ -106,10 +106,12 @@ _NUMERIC_CONFIG: dict[str, Any] = {
         format="%.4g",
         help="Highest value that is not an outlier (upper whisker of the boxplot)",
     ),
-    "outliers": st.column_config.NumberColumn(
-        "Outliers", help=f"Values beyond {cols.TUKEY_K:g} times the IQR from the quartiles (Tukey)"
+    # Count and share in one column, built by ``_with_labels``.
+    "outliers_label": st.column_config.TextColumn(
+        "Outliers",
+        help=f"Values beyond {cols.TUKEY_K:g} times the IQR from the quartiles (Tukey), and "
+        "their share of the values",
     ),
-    "outliers_pct": st.column_config.NumberColumn("Outliers %", format="%.1f%%"),
     "zeros": st.column_config.NumberColumn("Zeros"),
     "negatives": st.column_config.NumberColumn("Negatives"),
     "infinite": st.column_config.NumberColumn("Infinite"),
@@ -281,7 +283,7 @@ def _columns() -> None:
         _overview(dataset_id, dataset, schema)
     elif view == "Numeric":
         table = cache.numeric_stats(dataset_id, df, names, _CFG.sample_rows)
-        _numeric_table(cols.with_unparsed(table, dataset.unparsed))
+        _numeric_table(_with_labels(cols.with_unparsed(table, dataset.unparsed)))
         _sample_note(dataset, "Percentiles, IQR, skewness and kurtosis are")
     elif view == "Categorical":
         _categorical_table(cache.categorical_stats(dataset_id, df, names))
@@ -324,7 +326,6 @@ def _overview(dataset_id: str, dataset: LoadedDataset, schema: Schema) -> None:
             "missing_pct",
             "unique_pct",
             "distribution",
-            "summary",
         ],
         column_config={
             "column": st.column_config.TextColumn("Column", pinned=True),
@@ -344,7 +345,6 @@ def _overview(dataset_id: str, dataset: LoadedDataset, schema: Schema) -> None:
                     "Text: length of the values."
                 ),
             ),
-            "summary": st.column_config.TextColumn("Summary", width="large"),
         },
     )
     _sample_note(dataset, "Histograms and text lengths are")
@@ -370,7 +370,7 @@ def _inspector(dataset_id: str, dataset: LoadedDataset, schema: Schema, name: st
         if kind in cols.NUMERIC_TYPES:
             names = cols.columns_of(schema, cols.NUMERIC_TYPES)
             table = cache.numeric_stats(dataset_id, df, names, _CFG.sample_rows)
-            stats = _row(cols.with_unparsed(table, dataset.unparsed), name)
+            stats = _row(_with_labels(cols.with_unparsed(table, dataset.unparsed)), name)
             # Infinite values are not missing, but every measure ignores them.
             if not stats["count"]:
                 st.info("The column has no finite values.")
@@ -454,17 +454,23 @@ def _inspect_numeric(name: str, stats: pd.Series, detail: cols.ColumnDetail) -> 
             key=f"profile_hist_{name}",
         )
 
-    with st.expander("All measures"):
-        rows = [
-            (group, _NUMERIC_CONFIG[key]["label"], _format_stat(key, stats[key]))
-            for group, keys in _NUMERIC_GROUPS.items()
-            for key in keys
-        ]
-        st.dataframe(
-            pd.DataFrame(rows, columns=["Group", "Measure", "Value"]),
-            hide_index=True,
-            height=_HEADER_PX + _ROW_PX * len(rows),
-        )
+    # One card per group, side by side; they wrap to new rows on narrow screens.
+    with st.expander("All measures"), st.container(horizontal=True, gap="small"):
+        for group, keys in _NUMERIC_GROUPS.items():
+            with st.container(border=True, width="stretch", gap=None):
+                st.markdown(f"**{group}**")
+                for key in keys:
+                    # Label on the left, value on the right. The value never moves to a line
+                    # of its own: a long label wraps instead.
+                    with st.container(
+                        horizontal=True, horizontal_alignment="distribute", wrap=False
+                    ):
+                        st.markdown(
+                            f":gray[{_NUMERIC_CONFIG[key]['label']}]",
+                            width="stretch",
+                            help=_NUMERIC_CONFIG[key].get("help"),
+                        )
+                        st.markdown(f"**{_format_stat(key, stats[key])}**", width="content")
 
 
 def _inspect_categorical(name: str, stats: pd.Series) -> None:
@@ -611,7 +617,6 @@ def _categorical_table(table: pd.DataFrame) -> None:
             "variants": st.column_config.NumberColumn(
                 "Variants", help='Values that only differ in case or spaces ("Madrid", "madrid ")'
             ),
-            "variant_example": st.column_config.TextColumn("Example of variant", width="medium"),
         },
     )
 
@@ -891,6 +896,15 @@ def _row(table: pd.DataFrame, name: str) -> pd.Series:
     return table.set_index("column").loc[name]
 
 
+def _with_labels(table: pd.DataFrame) -> pd.DataFrame:
+    """Numeric table plus ``outliers_label``: outliers and their share in one text column."""
+    labels = [
+        f"{int(n):,} ({pct:.1f}%)"
+        for n, pct in zip(table["outliers"], table["outliers_pct"], strict=True)
+    ]
+    return table.assign(outliers_label=labels)
+
+
 def _table_height(n_rows: int) -> int:
     """Height that fits ``n_rows`` rows, up to ``ProfileConfig.table_max_height``."""
     return min(_HEADER_PX + _ROW_PX * n_rows, _CFG.table_max_height)
@@ -908,14 +922,12 @@ def _num(value: float) -> str:
 
 
 def _format_stat(key: str, value: Any) -> str:
-    if key == "shape":
+    if key in ("shape", "outliers_label"):
         return str(value) or "—"
     if pd.isna(value):
         return "—"
-    if key in ("count", "outliers", "zeros", "negatives", "infinite", "unparsed"):
+    if key in ("count", "zeros", "negatives", "infinite", "unparsed"):
         return f"{int(value):,}"
-    if key == "outliers_pct":
-        return f"{value:.1f}%"
     if key in ("skew", "kurtosis"):
         return f"{value:+.2f}"
     return f"{value:,.4g}"

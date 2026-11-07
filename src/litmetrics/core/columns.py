@@ -1,8 +1,8 @@
 """Column table of the Profile page: what each column holds, described for its semantic type.
 
 Two levels, as in the column table proof of concept (drafts/column_table_poc):
-- ``column_overview``: one short row per column (type, missing, distinct values, a one-line
-  summary and the bars of a small chart);
+- ``column_overview``: one short row per column (type, missing, distinct values and the bars
+  of a small chart);
 - per-type tables (``numeric_stats``, ``categorical_stats``, ``datetime_stats``,
   ``text_stats``), each with only the measures that make sense for its type, and
   ``column_detail`` with the chart data of one column.
@@ -55,7 +55,7 @@ NUMERIC_STATS_COLUMNS = [
     "infinite", "skew", "kurtosis", "shape",
 ]  # fmt: skip
 CATEGORICAL_STATS_COLUMNS = [
-    "column", "unique", "mode", "mode_pct", "top", "rare", "variants", "variant_example",
+    "column", "unique", "mode", "mode_pct", "top", "rare", "variants",
 ]  # fmt: skip
 DATETIME_STATS_COLUMNS = [
     "column", "min", "max", "span_days", "frequency", "unparsed", "future",
@@ -345,7 +345,6 @@ def categorical_stats(df: pd.DataFrame, columns: Sequence[str]) -> pd.DataFrame:
         counts = value_counts(df[name])
         total = counts.sum()
         share = counts / total * 100 if total else counts.astype(float)
-        variants = _variants(counts)
         rows.append(
             {
                 "column": name,
@@ -354,8 +353,7 @@ def categorical_stats(df: pd.DataFrame, columns: Sequence[str]) -> pd.DataFrame:
                 "mode_pct": float(share.iloc[0]) if total else float("nan"),
                 "top": ", ".join(f"{v} ({p:.0f}%)" for v, p in share.head(3).items()),
                 "rare": int((share < RARE_PCT).sum()),
-                "variants": len(variants),
-                "variant_example": " / ".join(repr(v) for v in variants[0]) if variants else "",
+                "variants": len(_variants(counts)),
             }
         )
     return pd.DataFrame(rows, columns=CATEGORICAL_STATS_COLUMNS)
@@ -579,10 +577,9 @@ def column_overview(
     numeric: pd.DataFrame,
     sample_rows: int,
 ) -> pd.DataFrame:
-    """One short row per column: type, missing, distinct values, a summary and a distribution.
+    """One short row per column: type, missing, distinct values and a distribution.
 
-    Columns: ``column``, ``semantic_type``, ``missing_pct``, ``unique_pct`` (from ``base``),
-    ``summary`` (a one-line description written for the type of the column) and
+    Columns: ``column``, ``semantic_type``, ``missing_pct``, ``unique_pct`` (from ``base``) and
     ``distribution`` (the bar heights of a small chart of its values):
     - numeric: one bar per value if there are few, else histogram without outliers;
     - date: histogram over time;
@@ -600,9 +597,11 @@ def column_overview(
     for column in schema.columns:
         name, kind = column.name, column.semantic_type
         stats = table.loc[name]
-        n_values = base.n_rows - int(stats["missing"])
-        summary, bars = _describe(
-            df[name], kind, n_values, int(stats["unique"]), numeric, sample_rows
+        has_values = int(stats["missing"]) < base.n_rows
+        bars = (
+            _overview_bars(df[name], kind, int(stats["unique"]), numeric, sample_rows)
+            if has_values
+            else Bars()
         )
         rows.append(
             {
@@ -610,59 +609,32 @@ def column_overview(
                 "semantic_type": kind.value,
                 "missing_pct": float(stats["missing_pct"]),
                 "unique_pct": float(stats["unique_pct"]),
-                "summary": summary,
                 "distribution": list(bars.counts),
             }
         )
     return pd.DataFrame(
-        rows,
-        columns=["column", "semantic_type", "missing_pct", "unique_pct", "summary", "distribution"],
+        rows, columns=["column", "semantic_type", "missing_pct", "unique_pct", "distribution"]
     )
 
 
-def _describe(
+def _overview_bars(
     series: pd.Series,
     kind: SemanticType,
-    n_values: int,
     unique: int,
     numeric: pd.DataFrame,
     sample_rows: int,
-) -> tuple[str, Bars]:
-    """One-line summary and small chart of a column, for the overview."""
-    if n_values == 0:
-        return "No values", Bars()
-
+) -> Bars:
+    """Small chart of a column with at least one value, for the overview."""
     if kind in NUMERIC_TYPES:
         stats = numeric.loc[series.name]
         if not stats["count"]:
-            return "No finite values", Bars()
-        text = (
-            f"{stats['whisker_low']:,.4g} to {stats['whisker_high']:,.4g}"
-            f" · median {stats['median']:,.4g}"
-        )
-        if stats["outliers"]:
-            text += f" · {stats['outliers']:,} outliers"
-        return text, numeric_bars(series, stats, unique, OVERVIEW_BINS, sample_rows)
-
+            return Bars()
+        return numeric_bars(series, stats, unique, OVERVIEW_BINS, sample_rows)
     if kind in CATEGORICAL_TYPES:
-        bars, _, _ = top_bars(series, TOP_K)
-        share = bars.counts[0] / n_values * 100
-        return f"Most common: {bars.labels[0]} ({share:.0f}%)", bars
-
+        return top_bars(series, TOP_K)[0]
     if kind in DATE_TYPES:
-        values = datetime_values(series)
-        if values.empty:
-            return "No valid dates", Bars()
-        bars = datetime_bars(series, OVERVIEW_BINS, sample_rows)
-        return f"{values.min():%Y-%m-%d} to {values.max():%Y-%m-%d}", bars
-
+        return datetime_bars(series, OVERVIEW_BINS, sample_rows)
     if kind is SemanticType.TEXT:
-        lengths = text_lengths(sample_values(series, sample_rows))
-        text = f"{lengths.min()} to {lengths.max()} characters, {lengths.mean():.0f} on average"
-        return text, _length_bars(lengths, OVERVIEW_BINS)
-
-    # Identifier: the repeats follow from the distinct values, no need to look for them.
-    repeated = n_values - unique
-    if repeated:
-        return f"Key with {repeated:,} repeated values", Bars()
-    return "One distinct value per row", Bars()
+        return text_bars(series, OVERVIEW_BINS, sample_rows)
+    # Identifier: every value is different, there is nothing to draw.
+    return Bars()
