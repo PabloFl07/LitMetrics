@@ -10,6 +10,7 @@ Status: Load and Profile work. Home and Visualization are stubs. Statistics has 
 ```bash
 uv sync                                       # install (Python 3.14, deps pinned in uv.lock)
 uv run litmetrics                             # run the app (args go to streamlit run)
+uv run litmetrics --style 2                   # run it with style variant 2 (docs/styling.md)
 uv run pytest -q                              # all tests (~2 s)
 uv run ruff format src tests                  # format
 uv run ruff check src tests                   # lint
@@ -37,11 +38,15 @@ src/litmetrics/
     state.py        The ONLY module that touches st.session_state
     cache.py        Cache wrappers around core functions (load_dataset, Profile sections)
     charts.py       ECharts option builders: plain dicts, no streamlit, no streamlit_echarts
-    echarts.py      (create when needed) the only module importing streamlit_echarts
+    echarts.py      The only module importing streamlit_echarts: ``echarts.show`` draws themed charts
+    theme.py        Reads the theme (both modes): CSS variables --lm-* and chart colors
+    style.py        Injects the variant stylesheet, page header and cards (``style.card``)
+    styles.css      CSS of style variant 0; styles_<n>.css of variant n (docs/styling.md)
     pages/          One module per page
 tests/core/       pytest, mirrors src/litmetrics/core
 tests/ui/         AppTest smoke tests of the pages and tests of ui/charts.py
-docs/             Reference docs: data-loading.md (Load flow), performance.md (rules R-*)
+docs/             Reference docs: data-loading.md (Load flow), performance.md (rules R-*),
+                  styling.md (themes, variants, CSS selectors)
 drafts/           Design notes and plans (Spanish). Intent, not truth: the code wins
 ```
 
@@ -67,6 +72,14 @@ drafts/           Design notes and plans (Spanish). Intent, not truth: the code 
 - User-facing errors from reading a file are `ReadError` with a message shown as is.
 - A new file format = a new class with `load(source, options) -> LoadedDataset` in `core/io/`.
 - Thresholds and limits go in `config.py`, not as literals in pages.
+- Colors, fonts and radii go in the theme file of each style variant
+  (`.streamlit/themes/theme_<n>.toml`); `.streamlit/config.toml` only sets `theme.base`. The
+  stylesheets (`ui/styles.css`, `ui/styles_<n>.css`) only add what the theme cannot set, use
+  colors only through `var(--lm-*)` (from `ui/theme.py`), target our elements by `key`
+  (`.st-key-<key>`) and Streamlit ones by `data-testid` / ARIA, never by `.st-emotion-cache-*`
+  classes. Every page starts with `style.page_header(title, subtitle)`. See docs/styling.md.
+- Charts are drawn with `echarts.show(option, key=..., height=...)`; builders take their colors
+  as `theme.chart_colors()`, never hex literals.
 - Charts use [streamlit-echarts](https://github.com/andfanilo/streamlit-echarts) 0.7: any
   ECharts option, JavaScript callbacks, events, click/box/lasso selection returned to Python,
   themes and maps. Use the `add-chart` skill; it has the API checked against the installed

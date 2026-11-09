@@ -1,0 +1,88 @@
+/*
+ * Style variant 4: the original look. Polish on top of .streamlit/themes/theme_4.toml, which
+ * sets colors, fonts and radii.
+ * Loaded once per rerun by ui/style.py.
+ *
+ * Rules:
+ * - Colors come from the theme. Here only neutral shadows and translucent grays, so every
+ *   rule works in light and dark mode.
+ * - Our own elements are targeted by key: st.container(key="x") gets the class .st-key-x.
+ * - Streamlit elements are targeted by data-testid, never by .st-emotion-cache-* classes
+ *   (they change on every release). Check these selectors after upgrading Streamlit.
+ */
+
+/* Top navigation: a translucent bar with a hairline under it. */
+header[data-testid="stHeader"] {
+  border-bottom: 1px solid rgba(128, 128, 128, 0.18);
+  backdrop-filter: blur(8px);
+}
+
+a[data-testid="stTopNavLink"] {
+  font-weight: 500;
+  transition: background-color 0.15s ease;
+}
+
+/* Page header (ui/style.page_header): title, subtitle and a divider. */
+.st-key-page_header {
+  padding-bottom: 0.75rem;
+  margin-bottom: 0.5rem;
+  border-bottom: 1px solid rgba(128, 128, 128, 0.2);
+}
+
+.st-key-page_header h1 {
+  letter-spacing: -0.02em;
+}
+
+/* Metrics: small uppercase label over the value, as in a dashboard. */
+label[data-testid="stMetricLabel"] p {
+  font-size: 0.75rem;
+  font-weight: 600;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+  opacity: 0.7;
+}
+
+/* Bordered metrics (headline numbers) become cards with a soft shadow. */
+div[data-testid="stMetric"] {
+  transition:
+    box-shadow 0.2s ease,
+    transform 0.2s ease;
+}
+
+.st-key-headline div[data-testid="stMetric"] {
+  box-shadow:
+    0 1px 2px rgba(15, 23, 42, 0.05),
+    0 1px 3px rgba(15, 23, 42, 0.07);
+}
+
+.st-key-headline div[data-testid="stMetric"]:hover {
+  box-shadow: 0 6px 16px rgba(15, 23, 42, 0.12);
+  transform: translateY(-1px);
+}
+
+/* Tabs: medium weight labels, so the active one does not jump when it turns bold. */
+div[data-testid="stTabs"] button[role="tab"] p {
+  font-weight: 500;
+}
+
+/* Tables and the column inspector: lifted slightly from the page. */
+div[data-testid="stDataFrame"] {
+  border-radius: 8px;
+  box-shadow: 0 1px 3px rgba(15, 23, 42, 0.06);
+}
+
+.st-key-inspector {
+  box-shadow:
+    0 1px 3px rgba(15, 23, 42, 0.06),
+    0 8px 24px rgba(15, 23, 42, 0.06);
+}
+
+/* Cards of "All measures": tinted, so they read as a group inside the inspector. */
+[class*="st-key-measure_card_"] {
+  background: rgba(128, 128, 128, 0.05);
+}
+
+/* Expanders ("About this tab", "All measures"): medium weight summary. */
+div[data-testid="stExpander"] summary p {
+  font-weight: 500;
+}

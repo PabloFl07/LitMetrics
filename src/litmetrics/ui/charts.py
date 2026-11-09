@@ -10,21 +10,56 @@ from typing import Any
 
 import pandas as pd
 
-# Diverging palette for values in [-1, 1]: blue for negative, red for positive.
-_DIVERGING = ["#2166ac", "#92c5de", "#f7f7f7", "#f4a582", "#b2182b"]
-_BAR_COLOR = "#4c78a8"
-# Lighter tone of _BAR_COLOR: top of the bar gradient, fill of the boxplot box.
-_BAR_LIGHT = "#86b0e0"
-# Bars under the pointer, outliers, and the median and mean lines. Mid tones that read on a
-# light and a dark background.
-_HIGHLIGHT = "#f58518"
-_OUTLIER_COLOR = "#e45756"
-_MEDIAN_COLOR = "#f58518"
-_MEAN_COLOR = "#54a24b"
-# Color and line type of the marks, by name; others are solid in _HIGHLIGHT.
-_MARK_STYLES = {"Median": (_MEDIAN_COLOR, "solid"), "Mean": (_MEAN_COLOR, "dashed")}
 # Milliseconds of the entry animation of the inspector charts.
 _ANIMATION_MS = 700
+# Line type of the marks, by name; others are solid.
+_MARK_LINES = {"Median": "solid", "Mean": "dashed"}
+# Opacity of the box fill of the boxplot, over the page background.
+_BOX_FILL_OPACITY = 0.35
+# Grid lines: a translucent gray that reads on a light and on a dark background, so it does not
+# depend on the mode the page had when the chart was built.
+_SPLIT_LINE = {"type": "dashed", "color": "rgba(128, 128, 128, 0.25)"}
+
+
+@dataclass(frozen=True)
+class ChartColors:
+    """Colors the builders give to their series. Built from the theme by ``ui/theme.py``.
+
+    Attributes:
+        accent: Bars and box outline (primaryColor of the theme).
+        accent_light: Lighter tone of ``accent``: top of the bar gradient, box fill.
+        highlight: Bars under the pointer and marks without a style of their own.
+        outlier: Outlier dots of the boxplot.
+        median: Line and label of the median.
+        mean: Line and label of the mean.
+        background: Page background: border of the outlier dots, so overlapping dots separate.
+        emphasis: Border of the heatmap cell under the pointer (the text color).
+        diverging: Five stops for values in [-1, 1], from negative to positive. Symmetric, with
+            a neutral middle that works on the page background.
+    """
+
+    accent: str
+    accent_light: str
+    highlight: str
+    outlier: str
+    median: str
+    mean: str
+    background: str
+    emphasis: str
+    diverging: tuple[str, str, str, str, str]
+
+
+@dataclass(frozen=True)
+class ChartTheme:
+    """Look shared by every chart, applied by ``themed`` on top of what a builder returns.
+
+    Attributes:
+        palette: Series colors, in order (``option["color"]``); the first is the accent.
+        font: CSS font family of every text in the chart.
+    """
+
+    palette: tuple[str, ...]
+    font: str
 
 
 @dataclass(frozen=True)
@@ -42,7 +77,7 @@ class Mark:
     text: str
 
 
-def heatmap_options(matrix: pd.DataFrame) -> dict[str, Any]:
+def heatmap_options(matrix: pd.DataFrame, colors: ChartColors) -> dict[str, Any]:
     """Heatmap of a square correlation matrix. Undefined cells are left empty."""
     labels = [str(c) for c in matrix.columns]
     data = [
@@ -75,7 +110,7 @@ def heatmap_options(matrix: pd.DataFrame) -> dict[str, Any]:
             "orient": "vertical",
             "right": 0,
             "top": "center",
-            "inRange": {"color": _DIVERGING},
+            "inRange": {"color": list(colors.diverging)},
         },
         "series": [
             {
@@ -83,13 +118,15 @@ def heatmap_options(matrix: pd.DataFrame) -> dict[str, Any]:
                 "data": data,
                 # Numbers in the cells only while they fit.
                 "label": {"show": len(labels) <= 12},
-                "emphasis": {"itemStyle": {"borderColor": "#333", "borderWidth": 1}},
+                "emphasis": {"itemStyle": {"borderColor": colors.emphasis, "borderWidth": 1}},
             }
         ],
     }
 
 
-def bar_options(labels: list[str], values: list[float], unit: str = "") -> dict[str, Any]:
+def bar_options(
+    labels: list[str], values: list[float], colors: ChartColors, unit: str = ""
+) -> dict[str, Any]:
     """Vertical bar chart, one bar per label. ``unit`` is appended to the values ("%")."""
     return {
         "tooltip": {"trigger": "axis"},
@@ -105,8 +142,12 @@ def bar_options(labels: list[str], values: list[float], unit: str = "") -> dict[
                 "overflow": "truncate",
             },
         },
-        "yAxis": {"type": "value", "axisLabel": {"formatter": "{value}" + unit}},
-        "series": [{"type": "bar", "data": values, "itemStyle": {"color": _BAR_COLOR}}],
+        "yAxis": {
+            "type": "value",
+            "axisLabel": {"formatter": "{value}" + unit},
+            "splitLine": {"lineStyle": _SPLIT_LINE},
+        },
+        "series": [{"type": "bar", "data": values, "itemStyle": {"color": colors.accent}}],
     }
 
 
@@ -118,6 +159,7 @@ def heatmap_height(n_columns: int) -> str:
 def histogram_options(
     labels: list[str],
     counts: list[int],
+    colors: ChartColors,
     show_labels: bool = False,
     marks: list[Mark] | None = None,
 ) -> dict[str, Any]:
@@ -137,15 +179,15 @@ def histogram_options(
         "data": counts,
         "barCategoryGap": "6%",
         "itemStyle": {
-            "color": _vertical_gradient(_BAR_LIGHT, _BAR_COLOR),
+            "color": _vertical_gradient(colors.accent_light, colors.accent),
             "borderRadius": [4, 4, 0, 0],
         },
-        "emphasis": {"itemStyle": {"color": _HIGHLIGHT}},
+        "emphasis": {"itemStyle": {"color": colors.highlight}},
         "animationDuration": _ANIMATION_MS,
         "animationEasing": "cubicOut",
     }
     if marks:
-        series["markLine"] = _mark_lines([labels[int(m.position)] for m in marks], marks)
+        series["markLine"] = _mark_lines([labels[int(m.position)] for m in marks], marks, colors)
     return {
         "tooltip": {
             "trigger": "item",
@@ -161,24 +203,25 @@ def histogram_options(
         "yAxis": {
             "type": "value",
             "minInterval": 1,
-            "splitLine": {"lineStyle": {"type": "dashed", "opacity": 0.5}},
+            "splitLine": {"lineStyle": _SPLIT_LINE},
         },
         "series": [series],
     }
 
 
-def hbar_options(labels: list[str], counts: list[int]) -> dict[str, Any]:
+def hbar_options(labels: list[str], counts: list[int], colors: ChartColors) -> dict[str, Any]:
     """Horizontal bars with the count at their end, the first label on top."""
     return {
         "tooltip": {"trigger": "axis", "axisPointer": {"type": "shadow"}},
         "grid": _grid(),
-        "xAxis": {"type": "value", "minInterval": 1},
+        "xAxis": {"type": "value", "minInterval": 1, "splitLine": {"lineStyle": _SPLIT_LINE}},
         "yAxis": {"type": "category", "data": labels[::-1]},
         "series": [
             {
                 "name": "Rows",
                 "type": "bar",
                 "data": counts[::-1],
+                "itemStyle": {"color": colors.accent, "borderRadius": [0, 4, 4, 0]},
                 "label": {"show": True, "position": "right"},
             }
         ],
@@ -196,6 +239,7 @@ def boxplot_options(
     outliers: list[float],
     data_range: tuple[float, float],
     zoom_ratio: float,
+    colors: ChartColors,
     marks: list[Mark] | None = None,
 ) -> dict[str, Any]:
     """Horizontal boxplot from precomputed statistics, with outliers as dots.
@@ -217,7 +261,7 @@ def boxplot_options(
         "xAxis": {
             "type": "value",
             "scale": True,
-            "splitLine": {"lineStyle": {"type": "dashed", "opacity": 0.5}},
+            "splitLine": {"lineStyle": _SPLIT_LINE},
         },
         "yAxis": {
             "type": "category",
@@ -232,11 +276,13 @@ def boxplot_options(
                 "data": [list(box)],
                 "boxWidth": [50, 90],
                 "itemStyle": {
-                    "color": _vertical_gradient(_BAR_LIGHT, _BAR_COLOR, opacity=0.35),
-                    "borderColor": _BAR_COLOR,
+                    "color": _vertical_gradient(
+                        colors.accent_light, colors.accent, opacity=_BOX_FILL_OPACITY
+                    ),
+                    "borderColor": colors.accent,
                     "borderWidth": 2,
                 },
-                "emphasis": {"itemStyle": {"borderColor": _HIGHLIGHT, "borderWidth": 3}},
+                "emphasis": {"itemStyle": {"borderColor": colors.highlight, "borderWidth": 3}},
                 "animationDuration": _ANIMATION_MS,
                 "animationEasing": "cubicOut",
             },
@@ -246,9 +292,9 @@ def boxplot_options(
                 "data": [[v, 0] for v in outliers],
                 "symbolSize": 9,
                 "itemStyle": {
-                    "color": _OUTLIER_COLOR,
+                    "color": colors.outlier,
                     "opacity": 0.6,
-                    "borderColor": "#fff",
+                    "borderColor": colors.background,
                     "borderWidth": 1,
                 },
                 "emphasis": {"scale": 1.6, "itemStyle": {"opacity": 1}},
@@ -257,7 +303,9 @@ def boxplot_options(
     }
     marks = [m for m in marks or [] if pd.notna(m.position)]
     if marks:
-        option["series"][0]["markLine"] = _mark_lines([float(m.position) for m in marks], marks)
+        option["series"][0]["markLine"] = _mark_lines(
+            [float(m.position) for m in marks], marks, colors
+        )
         option["grid"]["top"] = 16 + 16 * len(marks)
     span = box[-1] - box[0]
     if span > 0 and (high - low) > zoom_ratio * span:
@@ -283,7 +331,7 @@ def _grid() -> dict[str, Any]:
     return {"left": 8, "right": 16, "top": 16, "bottom": 8, "containLabel": True}
 
 
-def _mark_lines(positions: list[Any], marks: list[Mark]) -> dict[str, Any]:
+def _mark_lines(positions: list[Any], marks: list[Mark], colors: ChartColors) -> dict[str, Any]:
     """``markLine`` with one vertical line per mark at ``positions`` (axis values).
 
     Labels are stacked, so two marks at the same place do not overlap.
@@ -303,9 +351,15 @@ def _mark_lines(positions: list[Any], marks: list[Mark]) -> dict[str, Any]:
                 },
             }
             for i, (position, mark) in enumerate(zip(positions, marks, strict=True))
-            for color, line in [_MARK_STYLES.get(mark.name, (_HIGHLIGHT, "solid"))]
+            for color, line in [_mark_style(mark.name, colors)]
         ],
     }
+
+
+def _mark_style(name: str, colors: ChartColors) -> tuple[str, str]:
+    """Color and line type of the mark called ``name``."""
+    color = {"Median": colors.median, "Mean": colors.mean}.get(name, colors.highlight)
+    return color, _MARK_LINES.get(name, "solid")
 
 
 def _vertical_gradient(top: str, bottom: str, opacity: float = 1.0) -> dict[str, Any]:
@@ -317,15 +371,50 @@ def _vertical_gradient(top: str, bottom: str, opacity: float = 1.0) -> dict[str,
         "x2": 0,
         "y2": 1,
         "colorStops": [
-            {"offset": 0, "color": _with_alpha(top, opacity)},
-            {"offset": 1, "color": _with_alpha(bottom, opacity)},
+            {"offset": 0, "color": with_alpha(top, opacity)},
+            {"offset": 1, "color": with_alpha(bottom, opacity)},
         ],
     }
 
 
-def _with_alpha(color: str, opacity: float) -> str:
+def with_alpha(color: str, opacity: float) -> str:
     """``#rrggbb`` as ``rgba(...)`` with ``opacity``; unchanged when fully opaque."""
     if opacity >= 1:
         return color
     r, g, b = (int(color[i : i + 2], 16) for i in (1, 3, 5))
     return f"rgba({r}, {g}, {b}, {opacity})"
+
+
+def mix(color: str, other: str, amount: float) -> str:
+    """``#rrggbb`` between ``color`` (``amount`` 0) and ``other`` (``amount`` 1)."""
+    a = (int(color[i : i + 2], 16) for i in (1, 3, 5))
+    b = (int(other[i : i + 2], 16) for i in (1, 3, 5))
+    return "#" + "".join(f"{round(x + (y - x) * amount):02X}" for x, y in zip(a, b, strict=True))
+
+
+def themed(option: dict[str, Any], theme: ChartTheme) -> dict[str, Any]:
+    """``option`` with the look shared by every chart underneath: what the option sets wins.
+
+    Text and background colors are left to the ``"streamlit"`` theme of ``st_echarts``, which
+    follows light / dark mode in the browser as soon as the user switches.
+    """
+    defaults = {
+        "color": list(theme.palette),
+        "backgroundColor": "transparent",
+        "textStyle": {"fontFamily": theme.font},
+    }
+    # Only when the chart has a tooltip: adding the key alone would turn one on.
+    if isinstance(option.get("tooltip"), dict):
+        defaults["tooltip"] = {"textStyle": {"fontFamily": theme.font}}
+    return _merge(defaults, option)
+
+
+def _merge(base: dict[str, Any], override: dict[str, Any]) -> dict[str, Any]:
+    """New dict with ``override`` on top of ``base``, merging nested dicts. Inputs untouched."""
+    merged = dict(base)
+    for key, value in override.items():
+        if isinstance(value, dict) and isinstance(merged.get(key), dict):
+            merged[key] = _merge(merged[key], value)
+        else:
+            merged[key] = value
+    return merged

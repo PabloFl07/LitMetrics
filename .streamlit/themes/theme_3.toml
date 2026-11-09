@@ -1,0 +1,103 @@
+# Style variant 3 · Canvas Navy: BI canvas. A gray page with white cards in light mode (cards
+# lighter than the page in dark mode too), blue-indigo accent, 12 px radii, KPI cards with an
+# accent rule on the left (src/litmetrics/ui/styles_3.css).
+#
+# Here secondaryBackgroundColor is the card and widget surface, lighter than the page in both
+# modes. Inputs are white on the gray canvas, as in most BI tools.
+#
+# Accent scale (blue-indigo): 50 #EEF1FE · 100 #DDE3FC · 200 #BCC6F9 · 300 #95A4F4
+#   400 #7084EE · 500 #5266E8 · 600 #3A50D9 · 700 #2F43B8 · 800 #283893 · 900 #222F73
+# Light: primary 600, link 700. Dark: primary 500 (white text on it at 4.8:1), link 300.
+# Hover, focus and active tones are derived from primaryColor in src/litmetrics/ui/theme.py,
+# so the accent changes here and nowhere else.
+# Semantic text colors are one step darker than in variants 1 and 2: they sit on a gray page.
+# Contrast ratios (WCAG): docs/styling.md. tests/ui/test_theme.py checks them.
+
+[theme]
+font = "'IBM Plex Sans':https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:wght@400;500;600&display=swap"
+headingFont = "'IBM Plex Sans':https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:wght@500;600&display=swap"
+codeFont = "'IBM Plex Mono':https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500&display=swap"
+baseFontSize = 15
+codeFontSize = "13px"
+headingFontSizes = ["28px", "21px", "17px", "15px", "13px", "12px"]
+headingFontWeights = [600, 600, 600, 600, 500, 500]
+metricValueFontSize = "1.875rem"
+metricValueFontWeight = 500
+baseRadius = "12px"
+buttonRadius = "8px"
+showWidgetBorder = true
+linkUnderline = false
+paddingTop = "1.5rem"
+paddingBottom = "3rem"
+
+[theme.light]
+primaryColor = "#3A50D9"
+backgroundColor = "#F3F5F9"
+secondaryBackgroundColor = "#FFFFFF"
+codeBackgroundColor = "#E9EDF4"
+textColor = "#0F1A2E"
+linkColor = "#2F43B8"
+borderColor = "#D9DFE9"
+codeTextColor = "#283893"
+blueColor = "#2563EB"
+blueTextColor = "#1D4ED8"
+blueBackgroundColor = "#DEE6F8"
+greenColor = "#059669"
+greenTextColor = "#065F46"
+greenBackgroundColor = "#DBECEB"
+yellowColor = "#D97706"
+yellowTextColor = "#92400E"
+yellowBackgroundColor = "#F0E8E1"
+redColor = "#DC2626"
+redTextColor = "#B91C1C"
+redBackgroundColor = "#F1E0E4"
+orangeColor = "#EA580C"
+orangeTextColor = "#9A3412"
+orangeBackgroundColor = "#F2E4DF"
+violetColor = "#7C3AED"
+violetTextColor = "#5B21B6"
+violetBackgroundColor = "#E8E2F7"
+grayColor = "#64748B"
+grayTextColor = "#475569"
+grayBackgroundColor = "#E6E9EF"
+chartCategoricalColors = ["#3A50D9", "#0E7490", "#D97706", "#BE185D", "#059669", "#7C3AED", "#64748B", "#CA8A04"]
+chartSequentialColors = ["#EEF1FE", "#DDE3FC", "#BCC6F9", "#95A4F4", "#7084EE", "#5266E8", "#3A50D9", "#2F43B8", "#283893", "#222F73"]
+dataframeBorderColor = "#E2E7EF"
+dataframeHeaderBackgroundColor = "#F6F8FB"
+dataframeHeaderTextColor = "#334155"
+
+[theme.dark]
+primaryColor = "#5266E8"
+backgroundColor = "#0A1020"
+secondaryBackgroundColor = "#121A2E"
+codeBackgroundColor = "#18213A"
+textColor = "#E2E8F0"
+linkColor = "#A3B1F7"
+borderColor = "#24304A"
+codeTextColor = "#C7D0FB"
+blueColor = "#60A5FA"
+blueTextColor = "#93C5FD"
+blueBackgroundColor = "#172641"
+greenColor = "#34D399"
+greenTextColor = "#6EE7B7"
+greenBackgroundColor = "#102D32"
+yellowColor = "#FBBF24"
+yellowTextColor = "#FCD34D"
+yellowBackgroundColor = "#2E2A21"
+redColor = "#F87171"
+redTextColor = "#FCA5A5"
+redBackgroundColor = "#2E1F2C"
+orangeColor = "#FB923C"
+orangeTextColor = "#FDBA74"
+orangeBackgroundColor = "#2F2329"
+violetColor = "#A78BFA"
+violetTextColor = "#C4B5FD"
+violetBackgroundColor = "#1F1E40"
+grayColor = "#94A3B8"
+grayTextColor = "#CBD5E1"
+grayBackgroundColor = "#1A2236"
+chartCategoricalColors = ["#7084EE", "#22D3EE", "#FBBF24", "#F472B6", "#34D399", "#A78BFA", "#94A3B8", "#FACC15"]
+chartSequentialColors = ["#222F73", "#283893", "#2F43B8", "#3A50D9", "#5266E8", "#7084EE", "#95A4F4", "#BCC6F9", "#DDE3FC", "#EEF1FE"]
+dataframeBorderColor = "#24304A"
+dataframeHeaderBackgroundColor = "#121A2E"
+dataframeHeaderTextColor = "#CBD5E1"

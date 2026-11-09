@@ -1,0 +1,203 @@
+/*
+ * Style variant 2 · Graphite Blue: dense and flat, hairlines instead of shadows.
+ * Theme: .streamlit/themes/theme_2.toml.
+ * Loaded by ui/style.py after the --lm-* variables written by ui/theme.py.
+ *
+ * Rules (docs/styling.md):
+ * - Only what the theme cannot set. Colors only through var(--lm-*), which come from the theme
+ *   and switch with light / dark mode (light-dark()). No hex values here.
+ * - Our elements by key (st.container(key="x") -> .st-key-x), Streamlit ones by data-testid or
+ *   ARIA attributes. Never .st-emotion-cache-* or css-* classes, never DOM depth.
+ * - No !important.
+ * - Spacing in multiples of 4 px.
+ */
+
+/* ---------- Top navigation ---------------------------------------------------------------
+ * The theme paints the bar with the page background and gives links no active state of their
+ * own. A hairline separates the bar; the active page (aria-current) gets an accent underline.
+ */
+header[data-testid="stHeader"] {
+  border-bottom: 1px solid var(--lm-border);
+}
+
+a[data-testid="stTopNavLink"] {
+  padding: 4px 8px;
+  border-radius: 6px;
+  color: var(--lm-text-muted);
+  font-weight: 500;
+}
+
+a[data-testid="stTopNavLink"] * {
+  color: inherit;
+}
+
+a[data-testid="stTopNavLink"]:hover {
+  color: var(--lm-text);
+  background-color: var(--lm-accent-soft);
+}
+
+a[data-testid="stTopNavLink"][aria-current="page"] {
+  color: var(--lm-accent-text);
+  background-color: var(--lm-accent-soft);
+}
+
+/* ---------- Page header (style.page_header) -----------------------------------------------
+ * Title and subtitle separated from the content by a divider. The theme sets the size of h1,
+ * not its tracking or the gap under it.
+ */
+.st-key-page_header {
+  padding-bottom: 8px;
+  margin-bottom: 4px;
+  border-bottom: 1px solid var(--lm-border);
+}
+
+.st-key-page_header h1 {
+  letter-spacing: -0.01em;
+}
+
+.st-key-page_header [data-testid="stCaptionContainer"] {
+  color: var(--lm-text-muted);
+}
+
+/* ---------- Keyboard focus ----------------------------------------------------------------
+ * Streamlit draws focus on inputs (accent border) but not on every control. A ring in the
+ * focus color (3:1 against the page in both modes) on anything reachable with Tab.
+ */
+:is(a, button, summary, [role="tab"], [role="switch"], [role="checkbox"]):focus-visible {
+  outline: 2px solid var(--lm-focus);
+  outline-offset: 2px;
+}
+
+/* ---------- Metrics: KPI cards -------------------------------------------------------------
+ * The theme sets size and weight of the value, not its font: numbers in the mono font with
+ * tabular figures, so columns of KPIs line up. Small uppercase label above.
+ */
+div[data-testid="stMetricValue"] {
+  font-family: var(--lm-font-mono);
+  font-variant-numeric: tabular-nums;
+  letter-spacing: -0.01em;
+}
+
+label[data-testid="stMetricLabel"] p {
+  font-size: 0.6875rem;
+  font-weight: 600;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+  color: var(--lm-text-muted);
+}
+
+/* Headline metrics (border=True inside .st-key-headline): flat cards whose border darkens
+ * under the pointer. */
+.st-key-headline div[data-testid="stMetric"] {
+  padding: 12px;
+  background-color: var(--lm-canvas);
+}
+
+.st-key-headline div[data-testid="stMetric"]:hover {
+  border-color: var(--lm-border-strong);
+}
+
+/* ---------- Cards -------------------------------------------------------------------------
+ * Bordered containers we key: the column inspector, the cards of style.card() and the
+ * "All measures" cards. The theme gives them a border; here only a flat background.
+ */
+.st-key-inspector,
+[class*="st-key-card_"] {
+  background-color: var(--lm-canvas);
+}
+
+[class*="st-key-measure_card_"] {
+  background-color: var(--lm-surface);
+}
+
+[class*="st-key-measure_card_"] strong {
+  font-family: var(--lm-font-mono);
+  font-variant-numeric: tabular-nums;
+  font-weight: 500;
+}
+
+/* ---------- Tables ------------------------------------------------------------------------
+ * The theme colors the header and grid lines; only the frame radius here.
+ */
+div[data-testid="stDataFrame"] {
+  border-radius: 6px;
+}
+
+/* ---------- Tabs --------------------------------------------------------------------------
+ * Medium weight, muted until selected, so the active one stands out without changing width.
+ */
+div[data-testid="stTabs"] button[role="tab"] p {
+  font-weight: 500;
+  color: var(--lm-text-muted);
+}
+
+div[data-testid="stTabs"] button[role="tab"][aria-selected="true"] p {
+  color: var(--lm-text);
+}
+
+/* ---------- Buttons, pills and segmented controls ------------------------------------------
+ * Streamlit derives hover colors from primaryColor; only weight and the selected tint here.
+ */
+button[data-testid^="stBaseButton-"] p {
+  font-weight: 500;
+}
+
+button[data-testid="stBaseButton-pillsActive"],
+button[data-testid="stBaseButton-segmented_controlActive"] {
+  background-color: var(--lm-accent-soft);
+}
+
+/* ---------- File uploader -----------------------------------------------------------------
+ * A dashed drop zone that tints on hover, as in most upload areas.
+ */
+section[data-testid="stFileUploaderDropzone"] {
+  border: 1px dashed var(--lm-border-strong);
+}
+
+section[data-testid="stFileUploaderDropzone"]:hover {
+  border-color: var(--lm-accent);
+  background-color: var(--lm-accent-soft);
+}
+
+/* ---------- Expanders and forms -----------------------------------------------------------*/
+div[data-testid="stExpander"] summary p {
+  font-weight: 500;
+}
+
+div[data-testid="stForm"] {
+  background-color: var(--lm-canvas);
+}
+
+/* ---------- Numbers in widgets and badges -------------------------------------------------*/
+[data-testid="stSliderThumbValue"],
+[data-testid="stNumberInputField"] {
+  font-family: var(--lm-font-mono);
+  font-variant-numeric: tabular-nums;
+}
+
+span[data-testid="stMarkdownBadge"] {
+  font-weight: 500;
+  letter-spacing: 0.01em;
+}
+
+/* ---------- Page links --------------------------------------------------------------------*/
+a[data-testid="stPageLink-NavLink"]:hover {
+  background-color: var(--lm-accent-soft);
+}
+
+/* ---------- Motion ------------------------------------------------------------------------
+ * Transitions only for users who did not ask for reduced motion.
+ */
+@media (prefers-reduced-motion: no-preference) {
+  a[data-testid="stTopNavLink"],
+  section[data-testid="stFileUploaderDropzone"] {
+    transition:
+      color 0.15s ease,
+      background-color 0.15s ease,
+      border-color 0.15s ease;
+  }
+
+  .st-key-headline div[data-testid="stMetric"] {
+    transition: border-color 0.15s ease;
+  }
+}

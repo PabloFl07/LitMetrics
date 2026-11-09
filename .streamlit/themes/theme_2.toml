@@ -1,0 +1,99 @@
+# Style variant 2 · Graphite Blue: dense and flat. Neutral zinc grays, pure blue accent, 6 px
+# radii, hairlines instead of shadows, 14 px text and tighter spacing
+# (src/litmetrics/ui/styles_2.css).
+#
+# Accent scale (blue): 50 #EFF6FF · 100 #DBEAFE · 200 #BFDBFE · 300 #93C5FD · 400 #60A5FA
+#   500 #3B82F6 · 600 #2563EB · 700 #1D4ED8 · 800 #1E40AF · 900 #1E3A8A
+# Light: primary 600, link 700. Dark: primary #2F6FEB (white text on it stays at 4.6:1; 500
+# would drop to 3.7), link 300. Hover, focus and active tones are derived from primaryColor in
+# src/litmetrics/ui/theme.py, so the accent changes here and nowhere else.
+# Contrast ratios (WCAG): docs/styling.md. tests/ui/test_theme.py checks them.
+
+[theme]
+font = "'IBM Plex Sans':https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:wght@400;500;600&display=swap"
+headingFont = "'IBM Plex Sans':https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:wght@500;600&display=swap"
+codeFont = "'IBM Plex Mono':https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500&display=swap"
+baseFontSize = 14
+codeFontSize = "12.5px"
+headingFontSizes = ["22px", "18px", "15px", "14px", "13px", "12px"]
+headingFontWeights = [600, 600, 600, 500, 500, 500]
+metricValueFontSize = "1.5rem"
+metricValueFontWeight = 500
+baseRadius = "6px"
+buttonRadius = "6px"
+showWidgetBorder = true
+linkUnderline = false
+paddingTop = "1rem"
+paddingBottom = "2rem"
+
+[theme.light]
+primaryColor = "#2563EB"
+backgroundColor = "#FFFFFF"
+secondaryBackgroundColor = "#F4F5F7"
+codeBackgroundColor = "#F4F4F5"
+textColor = "#18181B"
+linkColor = "#1D4ED8"
+borderColor = "#E4E4E7"
+codeTextColor = "#3F3F46"
+blueColor = "#2563EB"
+blueTextColor = "#1D4ED8"
+blueBackgroundColor = "#E9EFFD"
+greenColor = "#059669"
+greenTextColor = "#047857"
+greenBackgroundColor = "#E6F4F0"
+yellowColor = "#D97706"
+yellowTextColor = "#B45309"
+yellowBackgroundColor = "#FBF1E6"
+redColor = "#DC2626"
+redTextColor = "#B91C1C"
+redBackgroundColor = "#FCE9E9"
+orangeColor = "#EA580C"
+orangeTextColor = "#C2410C"
+orangeBackgroundColor = "#FDEEE6"
+violetColor = "#7C3AED"
+violetTextColor = "#6D28D9"
+violetBackgroundColor = "#F1EBFD"
+grayColor = "#71717A"
+grayTextColor = "#52525B"
+grayBackgroundColor = "#F0F0F2"
+chartCategoricalColors = ["#2563EB", "#0D9488", "#EA580C", "#9333EA", "#CA8A04", "#DB2777", "#71717A", "#16A34A"]
+chartSequentialColors = ["#EFF6FF", "#DBEAFE", "#BFDBFE", "#93C5FD", "#60A5FA", "#3B82F6", "#2563EB", "#1D4ED8", "#1E40AF", "#1E3A8A"]
+dataframeBorderColor = "#E4E4E7"
+dataframeHeaderBackgroundColor = "#FAFAFA"
+dataframeHeaderTextColor = "#3F3F46"
+
+[theme.dark]
+primaryColor = "#2F6FEB"
+backgroundColor = "#0F0F12"
+secondaryBackgroundColor = "#18181C"
+codeBackgroundColor = "#18181C"
+textColor = "#E4E4E7"
+linkColor = "#93C5FD"
+borderColor = "#2C2C33"
+codeTextColor = "#D4D4D8"
+blueColor = "#60A5FA"
+blueTextColor = "#93C5FD"
+blueBackgroundColor = "#1B2635"
+greenColor = "#34D399"
+greenTextColor = "#6EE7B7"
+greenBackgroundColor = "#152C26"
+yellowColor = "#FBBF24"
+yellowTextColor = "#FCD34D"
+yellowBackgroundColor = "#322915"
+redColor = "#F87171"
+redTextColor = "#FCA5A5"
+redBackgroundColor = "#321E20"
+orangeColor = "#FB923C"
+orangeTextColor = "#FDBA74"
+orangeBackgroundColor = "#33221A"
+violetColor = "#C084FC"
+violetTextColor = "#D8B4FE"
+violetBackgroundColor = "#261C33"
+grayColor = "#A1A1AA"
+grayTextColor = "#D4D4D8"
+grayBackgroundColor = "#222227"
+chartCategoricalColors = ["#60A5FA", "#2DD4BF", "#FB923C", "#C084FC", "#FACC15", "#F472B6", "#A1A1AA", "#4ADE80"]
+chartSequentialColors = ["#1E3A8A", "#1E40AF", "#1D4ED8", "#2563EB", "#3B82F6", "#60A5FA", "#93C5FD", "#BFDBFE", "#DBEAFE", "#EFF6FF"]
+dataframeBorderColor = "#2C2C33"
+dataframeHeaderBackgroundColor = "#18181C"
+dataframeHeaderTextColor = "#D4D4D8"

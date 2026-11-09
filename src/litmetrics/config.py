@@ -9,8 +9,26 @@ class PageConfig:
 
     page_title: str = "LitMetrics"
     layout: str = "wide"
-    page_icon: str = ":fire:"
+    page_icon: str = ":material/insights:"
     initial_sidebar_state: str = "auto"
+
+
+@dataclass(frozen=True)
+class StyleConfig:
+    """Style variants: a theme ``theme_<n>.toml`` and a stylesheet ``styles_<n>.css``.
+
+    How they work and how to add one: docs/styling.md.
+
+    Variant 0 is the default look: ``theme_0.toml`` and ``styles.css``.
+    """
+
+    # Environment variable with the number of the active variant. ``litmetrics --style <n>``
+    # sets it, and the app reads it to pick the stylesheet that goes with the theme.
+    env_var: str = "LITMETRICS_STYLE"
+    # Variant used when the variable is not set.
+    default_variant: int = 0
+    # Folder of the theme files, relative to the project root.
+    themes_dir: str = ".streamlit/themes"
 
 
 @dataclass(frozen=True)

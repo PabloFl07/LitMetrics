@@ -3,7 +3,7 @@
 import streamlit as st
 
 from litmetrics.config import PageConfig
-from litmetrics.ui import state
+from litmetrics.ui import state, style
 from litmetrics.ui.pages.home import home
 from litmetrics.ui.pages.load import load_page
 from litmetrics.ui.pages.profile import profile_page
@@ -27,6 +27,7 @@ def main() -> None:
     st.set_page_config(
         page_title=PageConfig.page_title, page_icon=PageConfig.page_icon, layout=PageConfig.layout
     )
+    style.apply()
     state.init_state()
 
     nav = st.navigation(pages=build_pages(), position="top")

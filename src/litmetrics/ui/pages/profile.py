@@ -20,7 +20,6 @@ from typing import Any
 
 import pandas as pd
 import streamlit as st
-from streamlit_echarts import st_echarts
 
 from litmetrics.config import ProfileConfig
 from litmetrics.core import columns as cols
@@ -33,7 +32,7 @@ from litmetrics.core.profile import (
     top_correlated_pairs,
 )
 from litmetrics.core.schema import IDENTIFIER_MIN_DISTINCT, Schema, SemanticType, drop_columns
-from litmetrics.ui import cache, charts, state
+from litmetrics.ui import cache, charts, echarts, state, style, theme
 
 _CFG = ProfileConfig
 
@@ -72,10 +71,13 @@ _NUMERIC_GROUPS: dict[str, list[str]] = {
 }
 _NUMERIC_DEFAULT_GROUPS = ["Position", "Outliers"]
 
-# Height (px) of a table row and of its header, to size tables to their content.
-_ROW_PX = 35
-_HEADER_PX = 38
+# Height (px) of a table row and of its header, to size tables to their content. They depend on
+# baseFontSize in .streamlit/config.toml (15 px).
+_ROW_PX = 33
+_HEADER_PX = 36
 _CHART_HEIGHT = "240px"
+# Height of the charts of the Missing values tab.
+_MISSING_CHART_HEIGHT = "300px"
 # Height of the histogram / boxplot of the numeric column inspector.
 _INSPECT_CHART_HEIGHT = "300px"
 # Material icon of each chart of the numeric column inspector.
@@ -136,6 +138,7 @@ _NUMERIC_CONFIG: dict[str, Any] = {
 
 def profile_page() -> None:
     """Entry point registered in app.py."""
+    style.page_header("Profile", "An overall description of the data.")
     dataset = state.get_dataset()
     dataset_id = state.get_dataset_id()
     if dataset is None or dataset_id is None:
@@ -197,12 +200,17 @@ def _summary(dataset_id: str, dataset: LoadedDataset) -> None:
     if skipped := len(state.get_skipped_columns()):
         columns += f" ({skipped} skipped)"
     st.caption(f"{dataset.name} · {dataset.n_rows:,} rows · {columns}")
-    missing, rows, duplicates, constant, memory = st.columns(5)
-    missing.metric("Missing cells", f"{base.missing_cells_pct:.1f}%")
-    rows.metric("Rows with missing", f"{base.rows_with_missing:,}")
-    duplicates.metric("Duplicate rows", f"{base.duplicate_rows:,}")
-    constant.metric("Constant columns", base.constant_columns)
-    memory.metric("Memory", _format_bytes(base.memory_bytes))
+    # Keyed container: styles.css turns these metrics into cards.
+    with st.container(key="headline"):
+        missing, rows, duplicates, constant, memory = st.columns(5)
+    for where, label, value, icon in (
+        (missing, "Missing cells", f"{base.missing_cells_pct:.1f}%", "block"),
+        (rows, "Rows with missing", f"{base.rows_with_missing:,}", "table_rows"),
+        (duplicates, "Duplicate rows", f"{base.duplicate_rows:,}", "content_copy"),
+        (constant, "Constant columns", base.constant_columns, "horizontal_rule"),
+        (memory, "Memory", _format_bytes(base.memory_bytes), "memory"),
+    ):
+        where.metric(label, value, icon=f":material/{icon}:", border=True)
 
 
 # Issues
@@ -251,7 +259,7 @@ def _issues() -> None:
             key=state.widget_key("issue_filter"),
         )
         # Nothing selected shows everything. Grouped by kind, in the order of the legend.
-        with st.container(border=True):
+        with style.card("issues"):
             for kind in selected or kinds:
                 for issue in (i for i in issues if i.kind == kind):
                     where = " · ".join(f"`{c}`" for c in issue.columns)
@@ -363,8 +371,9 @@ def _inspector(dataset_id: str, dataset: LoadedDataset, schema: Schema, name: st
     df = dataset.df
     kind = schema.type_of(name)
     base = cache.base_profile(dataset_id, df).columns.set_index("column").loc[name]
-    with st.container(border=True):
-        st.markdown(f"#### `{name}`")
+    # Keyed: styles.css gives the inspector a shadow.
+    with st.container(border=True, key="inspector"):
+        st.subheader(name, anchor=False)
         st.caption(
             f"{kind.value} · pandas type `{df[name].dtype}` · {base['missing_pct']:.1f}% missing"
         )
@@ -435,7 +444,8 @@ def _inspect_numeric(name: str, stats: pd.Series, detail: cols.ColumnDetail) -> 
     # One card per group, side by side; they wrap to new rows on narrow screens.
     with st.expander("All measures"), st.container(horizontal=True, gap="small"):
         for group, keys in _NUMERIC_GROUPS.items():
-            with st.container(border=True, width="stretch", gap=None):
+            card_key = "measure_card_" + group.lower().replace(" ", "_")
+            with st.container(border=True, width="stretch", gap=None, key=card_key):
                 st.markdown(f"**{group}**")
                 for key in keys:
                     # Label on the left, value on the right. The value never moves to a line
@@ -471,9 +481,13 @@ def _histogram(name: str, stats: pd.Series, bars: cols.Bars) -> None:
         for label, key in (("Median", "median"), ("Mean", "mean"))
         if (index := cols.bar_index(bars, stats[key])) is not None
     ]
-    st_echarts(
+    echarts.show(
         charts.histogram_options(
-            list(bars.labels), list(bars.counts), show_labels=bars.per_value, marks=marks
+            list(bars.labels),
+            list(bars.counts),
+            theme.chart_colors(),
+            show_labels=bars.per_value,
+            marks=marks,
         ),
         height=_INSPECT_CHART_HEIGHT,
         key=_numeric_chart_key(name),
@@ -494,6 +508,7 @@ def _boxplot(name: str, stats: pd.Series, detail: cols.ColumnDetail) -> None:
         list(detail.outliers),
         (float(stats["min"]), float(stats["max"])),
         _CFG.box_zoom_ratio,
+        theme.chart_colors(),
         marks=[
             charts.Mark(label, float(stats[key]), _num(stats[key]))
             for label, key in (("Median", "median"), ("Mean", "mean"))
@@ -506,7 +521,7 @@ def _boxplot(name: str, stats: pd.Series, detail: cols.ColumnDetail) -> None:
     if "dataZoom" in option:
         caption += " Zoomed on the box: drag the slider to reach the farthest outliers."
     st.caption(caption)
-    st_echarts(option, height=_INSPECT_CHART_HEIGHT, key=_numeric_chart_key(name))
+    echarts.show(option, height=_INSPECT_CHART_HEIGHT, key=_numeric_chart_key(name))
 
 
 def _inspect_categorical(name: str, stats: pd.Series) -> None:
@@ -539,8 +554,8 @@ def _top_values(name: str, detail: cols.ColumnDetail) -> None:
         st.caption(
             f"Not drawn: {detail.other_values:,} other values in {detail.other_rows:,} rows."
         )
-    st_echarts(
-        charts.hbar_options(list(bars.labels), list(bars.counts)),
+    echarts.show(
+        charts.hbar_options(list(bars.labels), list(bars.counts), theme.chart_colors()),
         height=charts.hbar_height(len(bars.counts)),
         key=f"profile_top_{name}",
     )
@@ -569,8 +584,8 @@ def _inspect_dates(name: str, stats: pd.Series, detail: cols.ColumnDetail) -> No
 
     bars = detail.bars
     st.markdown("**Rows over time**")
-    st_echarts(
-        charts.histogram_options(list(bars.labels), list(bars.counts)),
+    echarts.show(
+        charts.histogram_options(list(bars.labels), list(bars.counts), theme.chart_colors()),
         height=_CHART_HEIGHT,
         key=f"profile_dates_{name}",
     )
@@ -604,8 +619,8 @@ def _inspect_text(
     with chart:
         bars = detail.bars
         st.markdown("**Length of the values**")
-        st_echarts(
-            charts.histogram_options(list(bars.labels), list(bars.counts)),
+        echarts.show(
+            charts.histogram_options(list(bars.labels), list(bars.counts), theme.chart_colors()),
             height=_CHART_HEIGHT,
             key=f"profile_lengths_{name}",
         )
@@ -714,7 +729,7 @@ def _missing(dataset_id: str, dataset: LoadedDataset) -> None:
         return
 
     by_col, by_row = st.columns(2)
-    with by_col:
+    with by_col, style.card("missing_by_column"):
         st.markdown("**By column**")
         # Sorted by missing values: the cap keeps the most incomplete columns.
         shown = by_column.head(_CFG.missing_chart_columns)
@@ -722,23 +737,27 @@ def _missing(dataset_id: str, dataset: LoadedDataset) -> None:
         if len(shown) < len(by_column):
             caption += f". The {len(shown)} most incomplete of {len(by_column)} columns."
         st.caption(caption)
-        st_echarts(
+        echarts.show(
             charts.bar_options(
                 [str(c) for c in shown["column"]],
                 [round(float(v), 2) for v in shown["missing_pct"]],
+                theme.chart_colors(),
                 unit="%",
             ),
+            height=_MISSING_CHART_HEIGHT,
             key="profile_missing_by_column",
         )
-    with by_row:
+    with by_row, style.card("missing_per_row"):
         st.markdown("**Per row**")
         st.caption("Rows by number of missing values")
         per_row = base.missing_per_row
-        st_echarts(
+        echarts.show(
             charts.bar_options(
                 [str(n) for n in per_row["missing_in_row"]],
                 [int(n) for n in per_row["rows"]],
+                theme.chart_colors(),
             ),
+            height=_MISSING_CHART_HEIGHT,
             key="profile_missing_per_row",
         )
 
@@ -780,9 +799,9 @@ def _correlation() -> None:
         )
 
     heatmap, pairs = st.columns([3, 2])
-    with heatmap:
-        st_echarts(
-            charts.heatmap_options(result.matrix),
+    with heatmap, style.card("correlation_heatmap"):
+        echarts.show(
+            charts.heatmap_options(result.matrix, theme.chart_colors()),
             height=charts.heatmap_height(len(result.matrix)),
             key="profile_correlation_heatmap",
         )

@@ -18,11 +18,14 @@ import streamlit as st
 from litmetrics.config import LoadConfig
 from litmetrics.core.io.base import LoadedDataset, ReadError, Source, compute_dataset_id
 from litmetrics.core.io.sniffing import detect_options
-from litmetrics.ui import cache, state
+from litmetrics.ui import cache, state, style
 
 
 def load_page() -> None:
     """Entry point registered in app.py."""
+    style.page_header(
+        "Load data", "Upload a CSV file. Separator, encoding and header are detected for you."
+    )
     source = _upload_source()
     if source is not None:
         _load(source)
@@ -74,10 +77,12 @@ def _load(source: Source) -> None:
 
 def _summary(dataset: LoadedDataset) -> None:
     """Basic information (Rows,columns,encoding) about the dataset"""
-    rows, columns, encoding = st.columns(3)
-    rows.metric("Rows", f"{dataset.n_rows:,}")
-    columns.metric("Columns", dataset.n_cols)
-    encoding.metric("Encoding", dataset.encoding)
+    # Keyed container: styles.css turns these metrics into cards.
+    with st.container(key="headline"):
+        rows, columns, encoding = st.columns(3)
+    rows.metric("Rows", f"{dataset.n_rows:,}", icon=":material/table_rows:", border=True)
+    columns.metric("Columns", dataset.n_cols, icon=":material/view_column:", border=True)
+    encoding.metric("Encoding", dataset.encoding, icon=":material/translate:", border=True)
 
 
 def _preview(dataset: LoadedDataset) -> None:

@@ -1,0 +1,64 @@
+# Style variant 4: the original LitMetrics theme (Inter, slate surfaces, blue accent), kept as it
+# was in .streamlit/config.toml. Its stylesheet is src/litmetrics/ui/styles_4.css.
+# How variants work: docs/styling.md.
+
+[theme]
+font = "'Inter':https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap"
+headingFont = "'Inter':https://fonts.googleapis.com/css2?family=Inter:wght@600;700&display=swap"
+codeFont = "'JetBrains Mono':https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500&display=swap"
+baseFontSize = 15
+codeFontSize = "13px"
+headingFontSizes = ["28px", "22px", "18px", "16px", "14px", "12px"]
+headingFontWeights = [700, 600, 600, 600, 500, 500]
+metricValueFontSize = "1.75rem"
+metricValueFontWeight = 600
+baseRadius = "8px"
+buttonRadius = "8px"
+showWidgetBorder = true
+linkUnderline = false
+paddingTop = "1.5rem"
+paddingBottom = "3rem"
+
+[theme.light]
+primaryColor = "#2563EB"
+backgroundColor = "#FFFFFF"
+secondaryBackgroundColor = "#F4F6FA"
+codeBackgroundColor = "#F1F5F9"
+textColor = "#0F172A"
+linkColor = "#1D4ED8"
+borderColor = "#DCE3EC"
+codeTextColor = "#334155"
+greenColor = "#059669"
+redColor = "#DC2626"
+yellowColor = "#D97706"
+orangeColor = "#EA580C"
+blueColor = "#2563EB"
+violetColor = "#7C3AED"
+grayColor = "#64748B"
+chartCategoricalColors = ["#2563EB", "#059669", "#7C3AED", "#EA580C", "#0891B2", "#DB2777", "#64748B", "#CA8A04"]
+chartSequentialColors = ["#EFF6FF", "#DBEAFE", "#BFDBFE", "#93C5FD", "#60A5FA", "#3B82F6", "#2563EB", "#1D4ED8", "#1E40AF", "#1E3A8A"]
+dataframeBorderColor = "#E2E8F0"
+dataframeHeaderBackgroundColor = "#F1F5F9"
+dataframeHeaderTextColor = "#334155"
+
+[theme.dark]
+primaryColor = "#3B82F6"
+backgroundColor = "#0B1220"
+secondaryBackgroundColor = "#151E2E"
+codeBackgroundColor = "#151E2E"
+textColor = "#E2E8F0"
+linkColor = "#60A5FA"
+borderColor = "#263247"
+codeTextColor = "#CBD5E1"
+greenColor = "#34D399"
+redColor = "#F87171"
+yellowColor = "#FBBF24"
+orangeColor = "#FB923C"
+blueColor = "#60A5FA"
+violetColor = "#A78BFA"
+grayColor = "#94A3B8"
+chartCategoricalColors = ["#60A5FA", "#34D399", "#A78BFA", "#FB923C", "#22D3EE", "#F472B6", "#94A3B8", "#FACC15"]
+chartSequentialColors = ["#1E3A8A", "#1E40AF", "#1D4ED8", "#2563EB", "#3B82F6", "#60A5FA", "#93C5FD", "#BFDBFE", "#DBEAFE", "#EFF6FF"]
+dataframeBorderColor = "#263247"
+dataframeHeaderBackgroundColor = "#151E2E"
+dataframeHeaderTextColor = "#CBD5E1"

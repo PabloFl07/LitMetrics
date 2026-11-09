@@ -1,0 +1,100 @@
+# Style variant 0 (default) · Slate Blue: mix of the others. Page colors of variant 1 a little grayer
+# (dark mode stays lighter than variant 2), navigation bar of variant 1, blue accent of variant 2
+# slightly muted, IBM Plex type, and the compact sizes and spacing of variant 2
+# (src/litmetrics/ui/styles.css).
+#
+# Accent scale (muted blue): 50 #EEF3FC · 100 #DCE6F9 · 200 #BBCEF3 · 300 #9CBDF2 · 400 #6E97E6
+#   500 #4A7BDE · 600 #2E5FD3 · 700 #2250BE · 800 #1F4399 · 900 #1E3A78
+# Light: primary 600, link 700. Dark: primary #346BD8 (white text on it stays at 4.9:1),
+# link 300. Hover, focus and active tones are derived from primaryColor in
+# src/litmetrics/ui/theme.py, so the accent changes here and nowhere else.
+# Contrast ratios (WCAG): docs/styling.md. tests/ui/test_theme.py checks them.
+
+[theme]
+font = "'IBM Plex Sans':https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:wght@400;500;600&display=swap"
+headingFont = "'IBM Plex Sans':https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:wght@500;600&display=swap"
+codeFont = "'IBM Plex Mono':https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500&display=swap"
+baseFontSize = 14
+codeFontSize = "12.5px"
+headingFontSizes = ["22px", "18px", "15px", "14px", "13px", "12px"]
+headingFontWeights = [600, 600, 600, 500, 500, 500]
+metricValueFontSize = "1.5rem"
+metricValueFontWeight = 500
+baseRadius = "6px"
+buttonRadius = "6px"
+showWidgetBorder = true
+linkUnderline = false
+paddingTop = "1rem"
+paddingBottom = "2rem"
+
+[theme.light]
+primaryColor = "#2E5FD3"
+backgroundColor = "#FAFAFB"
+secondaryBackgroundColor = "#F1F2F5"
+codeBackgroundColor = "#EEEFF2"
+textColor = "#111827"
+linkColor = "#2250BE"
+borderColor = "#E0E2E7"
+codeTextColor = "#374151"
+blueColor = "#2563EB"
+blueTextColor = "#1D4ED8"
+blueBackgroundColor = "#E9EFFD"
+greenColor = "#059669"
+greenTextColor = "#047857"
+greenBackgroundColor = "#E6F4F0"
+yellowColor = "#D97706"
+yellowTextColor = "#B45309"
+yellowBackgroundColor = "#FBF1E6"
+redColor = "#DC2626"
+redTextColor = "#B91C1C"
+redBackgroundColor = "#FCE9E9"
+orangeColor = "#EA580C"
+orangeTextColor = "#C2410C"
+orangeBackgroundColor = "#FDEEE6"
+violetColor = "#7C3AED"
+violetTextColor = "#6D28D9"
+violetBackgroundColor = "#F1EBFD"
+grayColor = "#64748B"
+grayTextColor = "#475569"
+grayBackgroundColor = "#EEF0F3"
+chartCategoricalColors = ["#2E5FD3", "#0891B2", "#D97706", "#DB2777", "#059669", "#7C3AED", "#64748B", "#CA8A04"]
+chartSequentialColors = ["#EEF3FC", "#DCE6F9", "#BBCEF3", "#9CBDF2", "#6E97E6", "#4A7BDE", "#2E5FD3", "#2250BE", "#1F4399", "#1E3A78"]
+dataframeBorderColor = "#E0E2E7"
+dataframeHeaderBackgroundColor = "#F1F2F5"
+dataframeHeaderTextColor = "#374151"
+
+[theme.dark]
+primaryColor = "#346BD8"
+backgroundColor = "#14161B"
+secondaryBackgroundColor = "#1C1F26"
+codeBackgroundColor = "#1C1F26"
+textColor = "#E4E6EB"
+linkColor = "#9CBDF2"
+borderColor = "#2E323B"
+codeTextColor = "#D1D5DB"
+blueColor = "#60A5FA"
+blueTextColor = "#93C5FD"
+blueBackgroundColor = "#1E2A3B"
+greenColor = "#34D399"
+greenTextColor = "#6EE7B7"
+greenBackgroundColor = "#18302C"
+yellowColor = "#FBBF24"
+yellowTextColor = "#FCD34D"
+yellowBackgroundColor = "#342D1D"
+redColor = "#F87171"
+redTextColor = "#FCA5A5"
+redBackgroundColor = "#342327"
+orangeColor = "#FB923C"
+orangeTextColor = "#FDBA74"
+orangeBackgroundColor = "#36271E"
+violetColor = "#A78BFA"
+violetTextColor = "#C4B5FD"
+violetBackgroundColor = "#28233B"
+grayColor = "#9BA1AD"
+grayTextColor = "#D0D4DB"
+grayBackgroundColor = "#23262E"
+chartCategoricalColors = ["#6E97E6", "#22D3EE", "#FBBF24", "#F472B6", "#34D399", "#A78BFA", "#94A3B8", "#FACC15"]
+chartSequentialColors = ["#1E3A78", "#1F4399", "#2250BE", "#2E5FD3", "#4A7BDE", "#6E97E6", "#9CBDF2", "#BBCEF3", "#DCE6F9", "#EEF3FC"]
+dataframeBorderColor = "#2E323B"
+dataframeHeaderBackgroundColor = "#1C1F26"
+dataframeHeaderTextColor = "#D1D5DB"
