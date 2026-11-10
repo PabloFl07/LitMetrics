@@ -7,6 +7,7 @@ State kept per browser session:
     dataset     The active ``LoadedDataset``, or None.
     dataset_id  Content hash of the active dataset (see ``compute_dataset_id``).
     source_id   Id of the last upload that was processed, to skip it on later reruns.
+    read_error  Id of the last upload that could not be read, and its message.
     schema      Semantic types of the active dataset. Cleared when the dataset changes.
     skipped     Columns the user left out of the profile. Cleared when the dataset changes.
 """
@@ -24,6 +25,7 @@ from litmetrics.core.schema import Schema
 _DATASET = "dataset"
 _DATASET_ID = "dataset_id"
 _SOURCE_ID = "source_id"
+_READ_ERROR = "read_error"
 _SCHEMA = "schema"
 _SKIPPED = "skipped_columns"
 
@@ -50,6 +52,7 @@ def _defaults() -> dict[str, Any]:
         _DATASET: None,
         _DATASET_ID: None,
         _SOURCE_ID: None,
+        _READ_ERROR: None,
         _SCHEMA: None,
         _SKIPPED: (),
     }
@@ -81,6 +84,17 @@ def set_dataset(dataset: LoadedDataset, dataset_id: str, source_id: str) -> bool
     st.session_state[_DATASET] = dataset
     st.session_state[_DATASET_ID] = dataset_id
     return True
+
+
+def get_read_error(source_id: str) -> str | None:
+    """Message of the error of upload ``source_id``, if reading it already failed."""
+    failed = st.session_state[_READ_ERROR]
+    return failed[1] if failed is not None and failed[0] == source_id else None
+
+
+def set_read_error(source_id: str, message: str) -> None:
+    """Remember that upload ``source_id`` could not be read, so it is not read again."""
+    st.session_state[_READ_ERROR] = (source_id, message)
 
 
 def clear_dataset() -> None:

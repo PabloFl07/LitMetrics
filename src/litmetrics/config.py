@@ -1,6 +1,8 @@
 """App-wide settings. Read as class attributes (``PageConfig.layout``), never instantiated."""
 
+import os
 from dataclasses import dataclass
+from typing import Literal
 
 
 @dataclass(frozen=True)
@@ -8,9 +10,8 @@ class PageConfig:
     """Arguments for ``st.set_page_config``."""
 
     page_title: str = "LitMetrics"
-    layout: str = "wide"
+    layout: Literal["centered", "wide"] = "wide"
     page_icon: str = ":material/insights:"
-    initial_sidebar_state: str = "auto"
 
 
 @dataclass(frozen=True)
@@ -29,6 +30,8 @@ class StyleConfig:
     default_variant: int = 0
     # Folder of the theme files, relative to the project root.
     themes_dir: str = ".streamlit/themes"
+    # Variants whose stylesheet stands alone, without the shared rules of ``styles_base.css``.
+    standalone_variants: tuple[int, ...] = (4,)
 
 
 @dataclass(frozen=True)
@@ -37,6 +40,8 @@ class LoadConfig:
 
     # Rows shown in the preview table.
     preview_rows: int = 100
+    # Height (px) of the preview table.
+    preview_height: int = 500
     # Datasets kept in memory by each cached function (shared by all sessions).
     cache_max_datasets: int = 5
 
@@ -48,6 +53,10 @@ class ProfileConfig:
     # Rows of the sample used for the expensive measures (quantiles, histograms, Spearman,
     # text lengths, outliers drawn). A dataset with fewer rows is used whole.
     sample_rows: int = 200_000
+    # Threads that profile columns at the same time (R-P8 in docs/performance.md). Up to 8:
+    # 8 numeric columns took 182 ms in 8 threads against 590 ms in one, and more threads only
+    # add memory (one column being sorted per thread).
+    workers: int = max(1, min(8, os.cpu_count() or 1))
     # Datasets kept in memory by each cached Profile function: the last ones opened.
     cache_max_datasets: int = 3
     # Columns inspected kept in memory by the cache of the column inspector.
@@ -72,3 +81,6 @@ class ProfileConfig:
     text_examples: int = 8
     # Height (px) at which the column tables stop growing and scroll.
     table_max_height: int = 560
+    # Height (px) of a row of the column tables. Set on the table, so it does not depend on the
+    # font size of the style variant.
+    table_row_height: int = 33
