@@ -34,6 +34,17 @@ def stylesheet(number: int) -> Path:
     return path if path.is_file() else _HERE / "styles.css"
 
 
+def stylesheets(number: int) -> tuple[Path, ...]:
+    """Stylesheets of variant ``number``, in the order they are loaded: the shared rules
+    (``styles_base.css``) and then the variant's own, which win on equal selectors.
+    Variants in ``StyleConfig.standalone_variants`` load only their own.
+    """
+    own = stylesheet(number)
+    if number in StyleConfig.standalone_variants and own.name != "styles.css":
+        return (own,)
+    return (_HERE / "styles_base.css", own)
+
+
 @cache
 def _css(path: Path) -> str:
     """Contents of a stylesheet, read once per process."""
@@ -44,8 +55,9 @@ def apply() -> None:
     """Inject the theme variables and the stylesheet. Call it on every rerun, before the page
     draws anything.
     """
+    css = "\n".join(_css(path) for path in stylesheets(variant()))
     # A <style>-only st.html takes no space on the page.
-    st.html(f"<style>{theme.css_variables()}\n{_css(stylesheet(variant()))}</style>")
+    st.html(f"<style>{theme.css_variables()}\n{css}</style>")
 
 
 def page_header(title: str, subtitle: str) -> None:

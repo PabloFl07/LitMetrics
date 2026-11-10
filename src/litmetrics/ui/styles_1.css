@@ -1,6 +1,7 @@
 /*
  * Style variant 1 · Indigo Slate: clean dashboard. Theme: .streamlit/themes/theme_1.toml.
- * Loaded by ui/style.py after the --lm-* variables written by ui/theme.py.
+ * Loaded by ui/style.py after the --lm-* variables written by ui/theme.py and after
+ * styles_base.css, the rules shared by variants 0 to 3. Only what this variant does its own way.
  *
  * Rules (docs/styling.md):
  * - Only what the theme cannot set. Colors only through var(--lm-*), which come from the theme
@@ -17,7 +18,6 @@
  */
 header[data-testid="stHeader"] {
   border-bottom: 1px solid var(--lm-border);
-  backdrop-filter: blur(8px);
 }
 
 a[data-testid="stTopNavLink"] {
@@ -25,15 +25,6 @@ a[data-testid="stTopNavLink"] {
   border-radius: 8px 8px 0 0;
   color: var(--lm-text-muted);
   font-weight: 500;
-}
-
-a[data-testid="stTopNavLink"] * {
-  color: inherit;
-}
-
-a[data-testid="stTopNavLink"]:hover {
-  color: var(--lm-text);
-  background-color: var(--lm-accent-soft);
 }
 
 a[data-testid="stTopNavLink"][aria-current="page"] {
@@ -55,29 +46,10 @@ a[data-testid="stTopNavLink"][aria-current="page"] {
   letter-spacing: -0.02em;
 }
 
-.st-key-page_header [data-testid="stCaptionContainer"] {
-  color: var(--lm-text-muted);
-}
-
-/* ---------- Keyboard focus ----------------------------------------------------------------
- * Streamlit draws focus on inputs (accent border) but not on every control. A ring in the
- * focus color (3:1 against the page in both modes) on anything reachable with Tab.
- */
-:is(a, button, summary, [role="tab"], [role="switch"], [role="checkbox"]):focus-visible {
-  outline: 2px solid var(--lm-focus);
-  outline-offset: 2px;
-}
-
 /* ---------- Metrics: KPI cards -------------------------------------------------------------
  * The theme sets size and weight of the value, not its font: numbers in the mono font with
  * tabular figures, so columns of KPIs line up. Small uppercase label above.
  */
-div[data-testid="stMetricValue"] {
-  font-family: var(--lm-font-mono);
-  font-variant-numeric: tabular-nums;
-  letter-spacing: -0.01em;
-}
-
 label[data-testid="stMetricLabel"] p {
   font-size: 0.75rem;
   font-weight: 600;
@@ -115,12 +87,6 @@ label[data-testid="stMetricLabel"] p {
   background-color: var(--lm-surface);
 }
 
-[class*="st-key-measure_card_"] strong {
-  font-family: var(--lm-font-mono);
-  font-variant-numeric: tabular-nums;
-  font-weight: 500;
-}
-
 /* ---------- Tables ------------------------------------------------------------------------
  * The theme colors the header and grid lines. Rounded frame and a faint shadow so a table
  * reads as one block.
@@ -130,67 +96,10 @@ div[data-testid="stDataFrame"] {
   box-shadow: 0 1px 2px var(--lm-shadow);
 }
 
-/* ---------- Tabs --------------------------------------------------------------------------
- * Medium weight, muted until selected, so the active one stands out without changing width.
- */
-div[data-testid="stTabs"] button[role="tab"] p {
-  font-weight: 500;
-  color: var(--lm-text-muted);
-}
-
-div[data-testid="stTabs"] button[role="tab"][aria-selected="true"] p {
-  color: var(--lm-text);
-}
-
-/* ---------- Buttons, pills and segmented controls ------------------------------------------
- * Streamlit derives hover colors from primaryColor; only weight and the selected tint here.
- */
-button[data-testid^="stBaseButton-"] p {
-  font-weight: 500;
-}
-
-button[data-testid="stBaseButton-pillsActive"],
-button[data-testid="stBaseButton-segmented_controlActive"] {
-  background-color: var(--lm-accent-soft);
-}
-
-/* ---------- File uploader -----------------------------------------------------------------
- * A dashed drop zone that tints on hover, as in most upload areas.
- */
-section[data-testid="stFileUploaderDropzone"] {
-  border: 1px dashed var(--lm-border-strong);
-}
-
-section[data-testid="stFileUploaderDropzone"]:hover {
-  border-color: var(--lm-accent);
-  background-color: var(--lm-accent-soft);
-}
-
 /* ---------- Expanders and forms -----------------------------------------------------------*/
-div[data-testid="stExpander"] summary p {
-  font-weight: 500;
-}
-
 div[data-testid="stForm"] {
   background-color: var(--lm-canvas);
   box-shadow: 0 1px 2px var(--lm-shadow);
-}
-
-/* ---------- Numbers in widgets and badges -------------------------------------------------*/
-[data-testid="stSliderThumbValue"],
-[data-testid="stNumberInputField"] {
-  font-family: var(--lm-font-mono);
-  font-variant-numeric: tabular-nums;
-}
-
-span[data-testid="stMarkdownBadge"] {
-  font-weight: 500;
-  letter-spacing: 0.01em;
-}
-
-/* ---------- Page links --------------------------------------------------------------------*/
-a[data-testid="stPageLink-NavLink"]:hover {
-  background-color: var(--lm-accent-soft);
 }
 
 /* ---------- Motion ------------------------------------------------------------------------
