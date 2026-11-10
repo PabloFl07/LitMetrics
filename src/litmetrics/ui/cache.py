@@ -13,6 +13,13 @@ The cache is shared by all sessions, so two users uploading the same file read i
 - Everything else uses ``st.cache_data`` and returns aggregates, whose size grows with the
   number of columns, never with the number of rows (R-C1). One wrapper per section, not per
   measure (R-C6), each with a limit of entries (R-C3).
+
+Which id to pass. Measures of one column (the per-type tables, the overview, the inspector,
+the correlation of some columns) do not depend on the other columns, so they take the id of the
+whole dataset with the whole DataFrame, and the columns to describe as ``names``. Leaving
+columns out of the profile then reuses them instead of computing them again. Only what depends
+on the set of columns (``base_profile``: duplicate rows; ``rows_with_missing``) takes the id of
+the view (``view_id``) with the DataFrame without those columns.
 """
 
 import hashlib
@@ -26,9 +33,10 @@ from litmetrics.core import columns, profile
 from litmetrics.core.io.base import LoadedDataset, Source
 from litmetrics.core.io.csv_loader import CsvLoader
 from litmetrics.core.io.sniffing import CsvOptions
-from litmetrics.core.schema import Schema, SemanticType, prepare_dataset
+from litmetrics.core.schema import ColumnSchema, Schema, SemanticType, prepare_dataset
 
 _PROFILE_MAX = ProfileConfig.cache_max_datasets
+_WORKERS = ProfileConfig.workers
 
 
 def view_id(dataset_id: str, skipped: Iterable[str]) -> str:
@@ -68,7 +76,7 @@ def load_dataset(
 @st.cache_data(max_entries=_PROFILE_MAX, show_spinner="Profiling the dataset…", show_time=True)
 def base_profile(dataset_id: str, _df: pd.DataFrame) -> profile.BaseProfile:
     """Exact counts of ``_df`` that every section starts from (R-P1)."""
-    return profile.base_profile(_df)
+    return profile.base_profile(_df, _WORKERS)
 
 
 @st.cache_data(max_entries=_PROFILE_MAX, show_spinner=False)
@@ -98,7 +106,7 @@ def correlation(
 def numeric_stats(
     dataset_id: str, _df: pd.DataFrame, names: tuple[str, ...], sample_rows: int
 ) -> pd.DataFrame:
-    return columns.numeric_stats(_df, names, sample_rows)
+    return columns.numeric_stats(_df, names, sample_rows, _WORKERS)
 
 
 @st.cache_data(
@@ -136,35 +144,57 @@ def text_stats(
 def column_overview(
     dataset_id: str, _df: pd.DataFrame, schema: Schema, sample_rows: int
 ) -> pd.DataFrame:
-    """One row per column. Reuses the cached base pass and numeric table."""
+    """One row per column of ``schema``. Reuses the cached base pass and numeric table."""
     base = base_profile(dataset_id, _df)
-    numeric = numeric_stats(
-        dataset_id, _df, columns.columns_of(schema, columns.NUMERIC_TYPES), sample_rows
-    )
-    return columns.column_overview(_df, schema, base, numeric, sample_rows)
+    numeric = numeric_stats(dataset_id, _df, schema.names_of(columns.NUMERIC_TYPES), sample_rows)
+    return columns.column_overview(_df, schema, base, numeric, sample_rows, _WORKERS)
 
 
 @st.cache_data(max_entries=ProfileConfig.cache_max_columns, show_spinner=False)
-def column_detail(
+def inspect_column(
     dataset_id: str,
     _df: pd.DataFrame,
     name: str,
     kind: SemanticType,
-    schema: Schema,
     sample_rows: int,
-) -> columns.ColumnDetail:
-    """Chart data of one column, for the inspector. Small, so many columns fit in the cache."""
-    base = base_profile(dataset_id, _df).columns.set_index("column")
-    numeric = numeric_stats(
-        dataset_id, _df, columns.columns_of(schema, columns.NUMERIC_TYPES), sample_rows
-    )
-    return columns.column_detail(
+    _unparsed: Mapping[str, int],
+    now: pd.Timestamp | None,
+) -> tuple[pd.DataFrame, columns.ColumnDetail]:
+    """Measures and chart data of one column, for the inspector.
+
+    Only that column is computed: the row is the same as in its per-type table, without
+    computing the table of every column of its type. Small, so many columns fit in the cache.
+
+    Returns:
+        The one-row per-type table of the column (with ``unparsed`` for numbers and dates),
+        and its chart data.
+
+    Args:
+        now: Date columns only (``datetime_stats``); pass None for the others, so their entry
+            does not expire with the clock.
+    """
+    names = (name,)
+    unique = int(base_profile(dataset_id, _df).columns.set_index("column").loc[name, "unique"])
+    stats: pd.Series | None = None
+    if kind in columns.NUMERIC_TYPES:
+        table = columns.with_unparsed(columns.numeric_stats(_df, names, sample_rows), _unparsed)
+        stats = table.iloc[0]
+    elif kind in columns.CATEGORICAL_TYPES:
+        table = columns.categorical_stats(_df, names)
+    elif kind in columns.DATE_TYPES:
+        table = columns.datetime_stats(_df, names, _unparsed, now)
+    else:
+        schema = Schema((ColumnSchema(name, str(_df[name].dtype), kind),))
+        base = base_profile(dataset_id, _df)
+        table = columns.text_stats(_df, names, schema, base, sample_rows)
+    detail = columns.column_detail(
         _df,
         name,
         kind,
-        unique=int(base.loc[name, "unique"]),
-        numeric=numeric,
+        unique=unique,
+        stats=stats,
         sample_rows=sample_rows,
         outlier_limit=ProfileConfig.max_outlier_dots,
         n_examples=ProfileConfig.text_examples,
     )
+    return table, detail

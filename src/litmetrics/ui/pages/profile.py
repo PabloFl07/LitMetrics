@@ -12,6 +12,8 @@ How it stays fast on large datasets (docs/performance.md):
   reruns its tab and nothing else (R-E2). Fragments read the dataset from ``state``.
 - Everything is computed through ``ui/cache.py``, once per dataset. Expensive measures use a
   sample, and the page says so where it applies (R-P2).
+- Measures of one column are cached under the id of the whole dataset (``_Active``), so
+  leaving columns out reuses them; only the counts over whole rows are recomputed.
 - Tables and charts receive aggregates or capped rows, never the whole dataset (R-E3, R-V2).
 """
 
@@ -32,7 +34,7 @@ from litmetrics.core.profile import (
     top_correlated_pairs,
 )
 from litmetrics.core.schema import IDENTIFIER_MIN_DISTINCT, Schema, SemanticType, drop_columns
-from litmetrics.ui import cache, charts, echarts, state, style, theme
+from litmetrics.ui import cache, charts, echarts, state, style, tables, theme
 
 _CFG = ProfileConfig
 
@@ -71,9 +73,8 @@ _NUMERIC_GROUPS: dict[str, list[str]] = {
 }
 _NUMERIC_DEFAULT_GROUPS = ["Position", "Outliers"]
 
-# Height (px) of a table row and of its header, to size tables to their content. They depend on
-# baseFontSize in .streamlit/config.toml (15 px).
-_ROW_PX = 33
+# Height (px) of the header of a table, to size tables to their content. Rows have a fixed
+# height (``ProfileConfig.table_row_height``) passed to every table sized this way.
 _HEADER_PX = 36
 _CHART_HEIGHT = "240px"
 # Height of the charts of the Missing values tab.
@@ -83,57 +84,64 @@ _INSPECT_CHART_HEIGHT = "300px"
 # Material icon of each chart of the numeric column inspector.
 _NUMERIC_CHART_ICONS = {"Histogram": "bar_chart", "Boxplot": "candlestick_chart"}
 
-# Labels, formats and explanations of every measure of the numeric table.
-_NUMERIC_CONFIG: dict[str, Any] = {
-    "column": st.column_config.TextColumn("Column", pinned=True),
-    "count": st.column_config.NumberColumn("Values", help="Finite, non-missing values"),
-    "min": st.column_config.NumberColumn("Min", format="%.4g"),
-    "p5": st.column_config.NumberColumn("P5", format="%.4g", help="5% of the values are lower"),
-    "q1": st.column_config.NumberColumn("Q1", format="%.4g", help="25% of the values are lower"),
-    "median": st.column_config.NumberColumn("Median", format="%.4g"),
-    "q3": st.column_config.NumberColumn("Q3", format="%.4g", help="75% of the values are lower"),
-    "p95": st.column_config.NumberColumn("P95", format="%.4g", help="95% of the values are lower"),
-    "max": st.column_config.NumberColumn("Max", format="%.4g"),
-    "mean": st.column_config.NumberColumn("Mean", format="%.4g"),
-    "std": st.column_config.NumberColumn("Std dev", format="%.4g"),
-    "cv": st.column_config.NumberColumn(
-        "CV", format="%.2f", help="Coefficient of variation: std dev / |mean|"
-    ),
-    "iqr": st.column_config.NumberColumn(
-        "IQR", format="%.4g", help="Q3 - Q1: width of the middle half of the values"
-    ),
-    "whisker_low": st.column_config.NumberColumn(
+# Label, number format and explanation of every measure of the numeric table. The table's
+# ``column_config`` and the "All measures" cards are both built from it.
+_NUMERIC_MEASURES: dict[str, tuple[str, str | None, str | None]] = {
+    "count": ("Values", None, "Finite, non-missing values"),
+    "min": ("Min", "%.4g", None),
+    "p5": ("P5", "%.4g", "5% of the values are lower"),
+    "q1": ("Q1", "%.4g", "25% of the values are lower"),
+    "median": ("Median", "%.4g", None),
+    "q3": ("Q3", "%.4g", "75% of the values are lower"),
+    "p95": ("P95", "%.4g", "95% of the values are lower"),
+    "max": ("Max", "%.4g", None),
+    "mean": ("Mean", "%.4g", None),
+    "std": ("Std dev", "%.4g", None),
+    "cv": ("CV", "%.2f", "Coefficient of variation: std dev / |mean|"),
+    "iqr": ("IQR", "%.4g", "Q3 - Q1: width of the middle half of the values"),
+    "whisker_low": (
         "Low (no outliers)",
-        format="%.4g",
-        help="Lowest value that is not an outlier (lower whisker of the boxplot)",
+        "%.4g",
+        "Lowest value that is not an outlier (lower whisker of the boxplot)",
     ),
-    "whisker_high": st.column_config.NumberColumn(
+    "whisker_high": (
         "High (no outliers)",
-        format="%.4g",
-        help="Highest value that is not an outlier (upper whisker of the boxplot)",
+        "%.4g",
+        "Highest value that is not an outlier (upper whisker of the boxplot)",
     ),
     # Count and share in one column, built by ``_with_labels``.
-    "outliers_label": st.column_config.TextColumn(
+    "outliers_label": (
         "Outliers",
-        help=f"Values beyond {cols.TUKEY_K:g} times the IQR from the quartiles (Tukey), and "
-        "their share of the values",
+        None,
+        f"Values beyond {cols.TUKEY_K:g} times the IQR from the quartiles (Tukey), and their "
+        "share of the values",
     ),
-    "zeros": st.column_config.NumberColumn("Zeros"),
-    "negatives": st.column_config.NumberColumn("Negatives"),
-    "infinite": st.column_config.NumberColumn("Infinite"),
-    "unparsed": st.column_config.NumberColumn(
+    "zeros": ("Zeros", None, None),
+    "negatives": ("Negatives", None, None),
+    "infinite": ("Infinite", None, None),
+    "unparsed": (
         "Not numbers",
-        help='Values that were not numbers in the file ("cincuenta", "41 años"). They are '
-        "counted as missing.",
+        None,
+        'Values that were not numbers in the file ("cincuenta", "41 años"). They are counted '
+        "as missing.",
     ),
-    "skew": st.column_config.NumberColumn(
-        "Skewness", format="%+.2f", help="0: symmetric. > 0: long tail to the right"
-    ),
-    "kurtosis": st.column_config.NumberColumn(
-        "Kurtosis", format="%+.2f", help="> 0: heavier tails than a normal distribution"
-    ),
-    "shape": st.column_config.TextColumn("Shape"),
+    "skew": ("Skewness", "%+.2f", "0: symmetric. > 0: long tail to the right"),
+    "kurtosis": ("Kurtosis", "%+.2f", "> 0: heavier tails than a normal distribution"),
+    "shape": ("Shape", None, None),
 }
+# Measures shown as text in the table; the rest are numbers.
+_TEXT_MEASURES = {"outliers_label", "shape"}
+
+
+def _numeric_column_config() -> dict[str, Any]:
+    """``column_config`` of the numeric table, from ``_NUMERIC_MEASURES``."""
+    config: dict[str, Any] = {"column": st.column_config.TextColumn("Column", pinned=True)}
+    for key, (label, fmt, help_text) in _NUMERIC_MEASURES.items():
+        if key in _TEXT_MEASURES:
+            config[key] = st.column_config.TextColumn(label, help=help_text)
+        else:
+            config[key] = st.column_config.NumberColumn(label, format=fmt, help=help_text)
+    return config
 
 
 def profile_page() -> None:
@@ -147,11 +155,11 @@ def profile_page() -> None:
 
     _skip_selector(state.require_schema())
     # From here on, the dataset without the skipped columns.
-    dataset_id, dataset, schema = _active()
-    if not schema.columns:
+    active = _active()
+    if not active.schema.columns:
         st.info("Every column is skipped. Remove some from the list to see their profile.")
         return
-    _summary(dataset_id, dataset)
+    _summary(active)
     # on_change="rerun": only the open tab runs (R-E1).
     issues, columns, missing, correlation = st.tabs(
         [_ISSUES_TAB, _COLUMNS_TAB, _MISSING_TAB, _CORRELATION_TAB],
@@ -166,7 +174,7 @@ def profile_page() -> None:
             _columns()
     if missing.open:
         with missing:
-            _missing(dataset_id, dataset)
+            _missing(active)
     if correlation.open:
         with correlation:
             _correlation()
@@ -193,9 +201,10 @@ def _skip_selector(schema: Schema) -> None:
     )
 
 
-def _summary(dataset_id: str, dataset: LoadedDataset) -> None:
+def _summary(active: _Active) -> None:
     """Headline quality numbers, from the base pass every tab starts from."""
-    base = cache.base_profile(dataset_id, dataset.df)
+    dataset = active.view
+    base = cache.base_profile(active.view_id, dataset.df)
     columns = f"{dataset.n_cols} columns"
     if skipped := len(state.get_skipped_columns()):
         columns += f" ({skipped} skipped)"
@@ -219,21 +228,21 @@ def _summary(dataset_id: str, dataset: LoadedDataset) -> None:
 @st.fragment
 def _issues() -> None:
     """Problems worth looking at before analysing the data, with a filter by kind."""
-    dataset_id, dataset, schema = _active()
-    df = dataset.df
+    active = _active()
+    schema = active.schema
     # Always Pearson, whatever the method chosen in Correlation, so the list does not change
     # when the user explores that tab. Same cache entry as Pearson there (R-P6).
     corr = cache.correlation(
-        dataset_id,
-        df,
-        cols.columns_of(schema, cols.NUMERIC_TYPES),
+        active.dataset_id,
+        active.dataset.df,
+        schema.names_of(cols.NUMERIC_TYPES),
         "pearson",
         _CFG.max_heatmap_columns,
         _CFG.sample_rows,
     )
     issues = detect_issues(
-        df,
-        cache.base_profile(dataset_id, df),
+        # Duplicate rows depend on the columns left: the base pass of the view.
+        cache.base_profile(active.view_id, active.view.df),
         schema,
         # Every pair, not only the top ones: none above the threshold may be left out.
         top_correlated_pairs(corr.matrix),
@@ -274,8 +283,9 @@ def _issues() -> None:
 @st.fragment
 def _columns() -> None:
     """Overview of every column, or the table of one semantic type."""
-    dataset_id, dataset, schema = _active()
-    sizes = {view: len(cols.columns_of(schema, kinds)) for view, (kinds, _) in _VIEWS.items()}
+    active = _active()
+    dataset_id, dataset, schema = active.dataset_id, active.dataset, active.schema
+    sizes = {view: len(schema.names_of(kinds)) for view, (kinds, _) in _VIEWS.items()}
     # Only views that have columns in this dataset.
     views = [view for view in _VIEWS if sizes[view]]
     view = st.segmented_control(
@@ -288,11 +298,11 @@ def _columns() -> None:
     )
     # Clicking the selected option again deselects it: fall back to the overview.
     view = view or "Overview"
-    names = cols.columns_of(schema, _VIEWS[view][0])
+    names = schema.names_of(_VIEWS[view][0])
     df = dataset.df
 
     if view == "Overview":
-        _overview(dataset_id, dataset, schema)
+        _overview(active)
     elif view == "Numeric":
         table = cache.numeric_stats(dataset_id, df, names, _CFG.sample_rows)
         _numeric_table(_with_labels(cols.with_unparsed(table, dataset.unparsed)))
@@ -307,9 +317,10 @@ def _columns() -> None:
     _about(_columns_help())
 
 
-def _overview(dataset_id: str, dataset: LoadedDataset, schema: Schema) -> None:
+def _overview(active: _Active) -> None:
     """One short row per column. Selecting a row opens the inspector of that column."""
-    table = cache.column_overview(dataset_id, dataset.df, schema, _CFG.sample_rows)
+    dataset = active.dataset
+    table = cache.column_overview(active.dataset_id, dataset.df, active.schema, _CFG.sample_rows)
     counts = table["semantic_type"].value_counts()
     kinds = [kind for kind in SemanticType if kind.value in counts]
     picked = st.pills(
@@ -329,9 +340,13 @@ def _overview(dataset_id: str, dataset: LoadedDataset, schema: Schema) -> None:
         hide_index=True,
         on_select="rerun",
         selection_mode="single-row",
-        # A new key when the filter changes, so a selected row never points to another column.
-        key=state.widget_key("overview_" + "-".join(sorted(k.value for k in picked))),
+        # A new key when the filter or the skipped columns change, so a selected row never
+        # points to another column (or past the end of a shorter table).
+        key=state.widget_key(
+            f"overview_{active.view_tag}_" + "-".join(sorted(k.value for k in picked))
+        ),
         height=_table_height(len(table)),
+        row_height=_CFG.table_row_height,
         column_order=[
             "column",
             "semantic_type",
@@ -363,13 +378,17 @@ def _overview(dataset_id: str, dataset: LoadedDataset, schema: Schema) -> None:
     if not event.selection.rows:
         st.caption(":material/touch_app: Select a row to inspect that column.")
         return
-    _inspector(dataset_id, dataset, schema, str(table.iloc[event.selection.rows[0]]["column"]))
+    _inspector(active, str(table.iloc[event.selection.rows[0]]["column"]))
 
 
-def _inspector(dataset_id: str, dataset: LoadedDataset, schema: Schema, name: str) -> None:
-    """Everything about one column, laid out for its semantic type."""
+def _inspector(active: _Active, name: str) -> None:
+    """Everything about one column, laid out for its semantic type.
+
+    Only that column is computed (``cache.inspect_column``), not the table of its type.
+    """
+    dataset_id, dataset = active.dataset_id, active.dataset
     df = dataset.df
-    kind = schema.type_of(name)
+    kind = active.schema.type_of(name)
     base = cache.base_profile(dataset_id, df).columns.set_index("column").loc[name]
     # Keyed: styles.css gives the inspector a shadow.
     with st.container(border=True, key="inspector"):
@@ -380,29 +399,24 @@ def _inspector(dataset_id: str, dataset: LoadedDataset, schema: Schema, name: st
         if base["missing"] == dataset.n_rows:
             st.info("The column has no values.")
             return
+        now = _now() if kind in cols.DATE_TYPES else None
+        table, detail = cache.inspect_column(
+            dataset_id, df, name, kind, _CFG.sample_rows, dataset.unparsed, now
+        )
         if kind in cols.NUMERIC_TYPES:
-            names = cols.columns_of(schema, cols.NUMERIC_TYPES)
-            table = cache.numeric_stats(dataset_id, df, names, _CFG.sample_rows)
-            stats = _row(_with_labels(cols.with_unparsed(table, dataset.unparsed)), name)
+            stats = _with_labels(table).iloc[0]
             # Infinite values are not missing, but every measure ignores them.
             if not stats["count"]:
                 st.info("The column has no finite values.")
                 return
-        detail = cache.column_detail(dataset_id, df, name, kind, schema, _CFG.sample_rows)
-        if kind in cols.NUMERIC_TYPES:
             _inspect_numeric(name, stats, detail)
         elif kind in cols.CATEGORICAL_TYPES:
-            names = cols.columns_of(schema, cols.CATEGORICAL_TYPES)
-            _inspect_categorical(name, _row(cache.categorical_stats(dataset_id, df, names), name))
+            _inspect_categorical(name, table.iloc[0])
             _top_values(name, detail)
         elif kind in cols.DATE_TYPES:
-            names = cols.columns_of(schema, cols.DATE_TYPES)
-            table = cache.datetime_stats(dataset_id, df, names, dataset.unparsed, _now())
-            _inspect_dates(name, _row(table, name), detail)
+            _inspect_dates(name, table.iloc[0], detail)
         else:
-            names = cols.columns_of(schema, cols.TEXT_TYPES)
-            table = cache.text_stats(dataset_id, df, names, schema, _CFG.sample_rows)
-            _inspect_text(name, kind, _row(table, name), detail)
+            _inspect_text(name, kind, table.iloc[0], detail)
         if kind not in cols.CATEGORICAL_TYPES:
             _sample_note(dataset, "Charts are")
 
@@ -423,7 +437,7 @@ def _inspect_numeric(name: str, stats: pd.Series, detail: cols.ColumnDetail) -> 
         f"{stats['outliers']:,}",
         f"{stats['outliers_pct']:.1f}% of the values",
     )
-    _metric(skew, "Skewness", f"{stats['skew']:+.2f}", stats["shape"] or None)
+    _metric(skew, "Skewness", _format_stat("skew", stats["skew"]), stats["shape"] or None)
 
     bars = detail.bars
     chart = st.segmented_control(
@@ -453,11 +467,8 @@ def _inspect_numeric(name: str, stats: pd.Series, detail: cols.ColumnDetail) -> 
                     with st.container(
                         horizontal=True, horizontal_alignment="distribute", wrap=False
                     ):
-                        st.markdown(
-                            f":gray[{_NUMERIC_CONFIG[key]['label']}]",
-                            width="stretch",
-                            help=_NUMERIC_CONFIG[key].get("help"),
-                        )
+                        label, _, help_text = _NUMERIC_MEASURES[key]
+                        st.markdown(f":gray[{label}]", width="stretch", help=help_text)
                         st.markdown(f"**{_format_stat(key, stats[key])}**", width="content")
 
 
@@ -644,8 +655,9 @@ def _numeric_table(table: pd.DataFrame) -> None:
         table,
         hide_index=True,
         column_order=order,
-        column_config=_NUMERIC_CONFIG,
+        column_config=_numeric_column_config(),
         height=_table_height(len(table)),
+        row_height=_CFG.table_row_height,
     )
 
 
@@ -654,6 +666,7 @@ def _categorical_table(table: pd.DataFrame) -> None:
         table,
         hide_index=True,
         height=_table_height(len(table)),
+        row_height=_CFG.table_row_height,
         column_config={
             "column": st.column_config.TextColumn("Column", pinned=True),
             "unique": st.column_config.NumberColumn("Distinct"),
@@ -677,6 +690,7 @@ def _dates_table(table: pd.DataFrame) -> None:
         table,
         hide_index=True,
         height=_table_height(len(table)),
+        row_height=_CFG.table_row_height,
         column_config={
             "column": st.column_config.TextColumn("Column", pinned=True),
             "min": st.column_config.DatetimeColumn("From", format="YYYY-MM-DD"),
@@ -698,6 +712,7 @@ def _text_table(table: pd.DataFrame) -> None:
         table,
         hide_index=True,
         height=_table_height(len(table)),
+        row_height=_CFG.table_row_height,
         column_config={
             "column": st.column_config.TextColumn("Column", pinned=True),
             "semantic_type": st.column_config.TextColumn("Type"),
@@ -719,8 +734,9 @@ def _text_table(table: pd.DataFrame) -> None:
 # Missing values
 
 
-def _missing(dataset_id: str, dataset: LoadedDataset) -> None:
+def _missing(active: _Active) -> None:
     """Where the missing values are: by column, by row and a sample of incomplete rows."""
+    dataset_id, dataset = active.view_id, active.view
     base = cache.base_profile(dataset_id, dataset.df)
     by_column = missing_by_column(base)
     if by_column.empty:
@@ -763,7 +779,7 @@ def _missing(dataset_id: str, dataset: LoadedDataset) -> None:
 
     n = _CFG.missing_rows_preview
     with st.expander(f"Rows with missing values (first {n})"):
-        st.dataframe(cache.rows_with_missing(dataset_id, dataset.df, n))
+        st.dataframe(tables.for_display(cache.rows_with_missing(dataset_id, dataset.df, n)))
     _about(_MISSING_HELP)
 
 
@@ -773,12 +789,13 @@ def _missing(dataset_id: str, dataset: LoadedDataset) -> None:
 @st.fragment
 def _correlation() -> None:
     """Correlation heatmap of the numeric columns and the strongest pairs."""
-    dataset_id, dataset, schema = _active()
+    active = _active()
+    dataset = active.dataset
     label = st.radio("Method", list(_METHODS), horizontal=True, key=state.widget_key("corr_method"))
     result = cache.correlation(
-        dataset_id,
+        active.dataset_id,
         dataset.df,
-        cols.columns_of(schema, cols.NUMERIC_TYPES),
+        active.schema.names_of(cols.NUMERIC_TYPES),
         _METHODS[label],
         _CFG.max_heatmap_columns,
         _CFG.sample_rows,
@@ -903,12 +920,35 @@ Measures how much two numeric columns move together, from -1 to +1.
 # HELPERS
 
 
-def _active() -> tuple[str, LoadedDataset, Schema]:
-    """Id, dataset and schema of the active dataset without the skipped columns.
+@dataclasses.dataclass(frozen=True, eq=False)
+class _Active:
+    """The active dataset, whole and without the skipped columns.
 
-    The id is a cache key of its own (``cache.view_id``), since the data differs from the full
-    dataset. Fragments call it instead of receiving the data as arguments, so a fragment rerun
-    always sees the current dataset (R-E2).
+    Attributes:
+        dataset_id: Id of the whole dataset. Key of the measures of one column, which do not
+            depend on the other columns: computed with ``dataset.df`` and reused whatever the
+            user skips.
+        dataset: The whole dataset.
+        view_id: Cache key of the dataset without the skipped columns (``cache.view_id``). Key
+            of what depends on the set of columns, such as duplicate rows.
+        view: The dataset without the skipped columns.
+        schema: Schema of ``view``: the columns the page describes.
+        view_tag: Short text that changes with the skipped columns, for widget keys.
+    """
+
+    dataset_id: str
+    dataset: LoadedDataset
+    view_id: str
+    view: LoadedDataset
+    schema: Schema
+    view_tag: str
+
+
+def _active() -> _Active:
+    """The active dataset, whole and without the skipped columns.
+
+    Fragments call it instead of receiving the data as arguments, so a fragment rerun always
+    sees the current dataset (R-E2).
     """
     dataset_id, dataset, schema = (
         state.require_dataset_id(),
@@ -917,9 +957,18 @@ def _active() -> tuple[str, LoadedDataset, Schema]:
     )
     skipped = state.get_skipped_columns()
     if not skipped:
-        return dataset_id, dataset, schema
-    df, schema = drop_columns(dataset.df, schema, skipped)
-    return cache.view_id(dataset_id, skipped), dataclasses.replace(dataset, df=df), schema
+        return _Active(dataset_id, dataset, dataset_id, dataset, schema, "all")
+    # No copy: the view shares the columns of the dataset.
+    df, view_schema = drop_columns(dataset.df, schema, skipped)
+    view_id = cache.view_id(dataset_id, skipped)
+    return _Active(
+        dataset_id,
+        dataset,
+        view_id,
+        dataclasses.replace(dataset, df=df),
+        view_schema,
+        view_id.removeprefix(f"{dataset_id}-skip-"),
+    )
 
 
 def _about(text: str) -> None:
@@ -946,11 +995,6 @@ def _now() -> pd.Timestamp:
     return pd.Timestamp.now().floor("h")
 
 
-def _row(table: pd.DataFrame, name: str) -> pd.Series:
-    """Row of a per-type table for column ``name``."""
-    return table.set_index("column").loc[name]
-
-
 def _with_labels(table: pd.DataFrame) -> pd.DataFrame:
     """Numeric table plus ``outliers_label``: outliers and their share in one text column."""
     labels = [
@@ -961,8 +1005,10 @@ def _with_labels(table: pd.DataFrame) -> pd.DataFrame:
 
 
 def _table_height(n_rows: int) -> int:
-    """Height that fits ``n_rows`` rows, up to ``ProfileConfig.table_max_height``."""
-    return min(_HEADER_PX + _ROW_PX * n_rows, _CFG.table_max_height)
+    """Height that fits ``n_rows`` rows of ``ProfileConfig.table_row_height``, up to
+    ``ProfileConfig.table_max_height``. Tables sized with it pass that row height.
+    """
+    return min(_HEADER_PX + _CFG.table_row_height * n_rows, _CFG.table_max_height)
 
 
 def _metric(

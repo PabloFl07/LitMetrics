@@ -7,10 +7,16 @@ Two levels, as in the column table proof of concept (drafts/column_table_poc):
   ``text_stats``), each with only the measures that make sense for its type, and
   ``column_detail`` with the chart data of one column.
 
+Every table is computed column by column, so a table of one column (the column inspector) costs
+only that column and gives the same row as the whole table.
+
 Cost on large datasets (docs/performance.md):
 - Counts are exact; quantiles, histograms, skewness, text lengths and the outliers drawn come
-  from a sample of the non-missing values of each column (``sample_values``, R-P2). Results
-  computed on a sample say so in the page.
+  from a sample of the non-missing values of each column (R-P2). Results computed on a sample
+  say so in the page.
+- Numeric columns are summarised with numpy on their finite values, one column at a time
+  (R-P8): 4x faster than the same measures on a DataFrame, with the memory of one column
+  instead of several copies of all of them, and in threads when ``workers`` > 1.
 - Missing and distinct values come from ``profile.BaseProfile`` instead of being counted again
   (R-P1).
 - Date columns are already ``datetime64`` (``schema.apply_schema``): nothing here parses
@@ -20,12 +26,15 @@ Cost on large datasets (docs/performance.md):
 from collections.abc import Iterable, Mapping, Sequence
 from dataclasses import dataclass, field
 from itertools import pairwise
+from typing import Any
 
 import numpy as np
 import pandas as pd
 from pandas.api import types as ptypes
 
-from litmetrics.core.profile import BaseProfile, sample
+from litmetrics.core.parallel import map_columns
+from litmetrics.core.profile import BaseProfile
+from litmetrics.core.sampling import positions, sample, sample_array
 from litmetrics.core.schema import Schema, SemanticType
 
 # Semantic types described by each per-type table.
@@ -48,6 +57,8 @@ RARE_PCT = 1.0
 PERCENTILES = (0.05, 0.25, 0.5, 0.75, 0.95)
 # Characters of the example value shown in the text table.
 EXAMPLE_WIDTH = 60
+# Values read at a time when looking for the first non-blank one.
+_EXAMPLE_CHUNK = 1_000
 
 NUMERIC_STATS_COLUMNS = [
     "column", "count", "mean", "std", "cv", "min", "p5", "q1", "median", "q3", "p95", "max",
@@ -122,12 +133,6 @@ class ColumnDetail:
     other_rows: int = 0
 
 
-def columns_of(schema: Schema, kinds: Iterable[SemanticType]) -> tuple[str, ...]:
-    """Names of the columns whose semantic type is one of ``kinds``, in dataset order."""
-    wanted = set(kinds)
-    return tuple(c.name for c in schema.columns if c.semantic_type in wanted)
-
-
 # Shared helpers
 
 
@@ -164,10 +169,10 @@ def value_labels(values: Iterable[float]) -> tuple[str, ...]:
     return tuple(repr(v) for v in values)
 
 
-def finite_values(series: pd.Series) -> pd.Series:
-    """Finite, non-missing values of a numeric column, as float."""
-    values = series.astype("float64")
-    return values[np.isfinite(values.to_numpy())]
+def finite_values(series: pd.Series) -> np.ndarray:
+    """Finite, non-missing values of a numeric column, as a ``float64`` array."""
+    values = series.to_numpy(dtype="float64", na_value=np.nan)
+    return values[np.isfinite(values)]
 
 
 def value_counts(series: pd.Series) -> pd.Series:
@@ -176,77 +181,101 @@ def value_counts(series: pd.Series) -> pd.Series:
     # A category column also lists the categories that never appear.
     counts = counts[counts > 0]
     if not ptypes.is_string_dtype(counts.index):
-        # Values that look the same as text (1 and "1") are one value for the user.
-        counts = counts.groupby(counts.index.astype(str)).sum()
+        labels = counts.index.astype(str)
+        # Values that look the same as text (1 and "1") are one value for the user. Usually
+        # (categories, booleans, numbers) there is nothing to merge and relabelling is enough.
+        counts = counts.set_axis(labels) if labels.is_unique else counts.groupby(labels).sum()
     return counts.sort_values(ascending=False, kind="stable")
 
 
 # Numeric
 
 
-def numeric_stats(df: pd.DataFrame, columns: Sequence[str], sample_rows: int) -> pd.DataFrame:
+def numeric_stats(
+    df: pd.DataFrame, columns: Sequence[str], sample_rows: int, workers: int = 1
+) -> pd.DataFrame:
     """Position, spread, outliers and shape of every numeric column in ``columns``.
 
     Missing values are ignored and infinite ones are counted apart (``infinite``) and then
     ignored too, so they do not turn the mean into ``inf``.
 
-    Quantiles, skewness and kurtosis come from ``sample_values`` of each column; the rest (counts,
-    mean, min, max, outliers) is exact. The *whiskers* are the most extreme values that are not
-    outliers by Tukey's rule (inside ``[Q1 - 1.5 IQR, Q3 + 1.5 IQR]``): the range of the column
-    without its outliers, the same one a boxplot draws.
+    Quantiles, skewness and kurtosis come from a sample of the finite values of each column
+    (``numeric_sample``); the rest (counts, mean, min, max, outliers) is exact. The *whiskers*
+    are the most extreme values that are not outliers by Tukey's rule (inside
+    ``[Q1 - 1.5 IQR, Q3 + 1.5 IQR]``): the range of the column without its outliers, the same
+    one a boxplot draws.
+
+    Args:
+        workers: Threads, one column each (``parallel.map_columns``). Same result.
     """
-    if not columns:
-        return pd.DataFrame(columns=NUMERIC_STATS_COLUMNS)
+    rows = map_columns(lambda name: _numeric_row(name, df[name], sample_rows), columns, workers)
+    return pd.DataFrame(rows, columns=NUMERIC_STATS_COLUMNS)
 
-    raw = df[list(columns)].astype("float64")
-    finite = np.isfinite(raw)
-    infinite = (raw.notna() & ~finite).sum()
-    num = raw.where(finite)
-    count = num.notna().sum()
 
-    # One sample per column, of its finite values: the fences of the exact outlier count come
-    # from it, so it must not lose the values of sparse columns.
-    parts = [sample_values(num[name], sample_rows) for name in columns]
-    q = pd.DataFrame(
-        {i: part.quantile(list(PERCENTILES)) for i, part in enumerate(parts)}
-    ).set_axis(num.columns, axis=1)
-    q1, median, q3 = q.loc[0.25], q.loc[0.5], q.loc[0.75]
-    iqr = q3 - q1
-    is_outlier = num.lt(q1 - TUKEY_K * iqr) | num.gt(q3 + TUKEY_K * iqr)
-    inside = num.where(~is_outlier)
-    outliers = is_outlier.sum()
+def numeric_sample(series: pd.Series, n: int) -> np.ndarray:
+    """Up to ``n`` random finite values of a numeric column (fixed seed).
 
-    mean = num.mean()
-    std = num.std()
-    skew = pd.Series([part.skew() for part in parts], index=num.columns)
-    return pd.DataFrame(
-        {
-            "column": list(columns),
-            "count": count.to_numpy(),
-            "mean": mean.to_numpy(),
-            "std": std.to_numpy(),
-            # Coefficient of variation: spread relative to the size of the values.
-            "cv": (std / mean.abs()).where(mean != 0).to_numpy(),
-            "min": num.min().to_numpy(),
-            "p5": q.loc[0.05].to_numpy(),
-            "q1": q1.to_numpy(),
-            "median": median.to_numpy(),
-            "q3": q3.to_numpy(),
-            "p95": q.loc[0.95].to_numpy(),
-            "max": num.max().to_numpy(),
-            "iqr": iqr.to_numpy(),
-            "whisker_low": inside.min().to_numpy(),
-            "whisker_high": inside.max().to_numpy(),
-            "outliers": outliers.to_numpy(),
-            "outliers_pct": (outliers / count.where(count > 0) * 100).fillna(0.0).to_numpy(),
-            "zeros": num.eq(0).sum().to_numpy(),
-            "negatives": num.lt(0).sum().to_numpy(),
-            "infinite": infinite.to_numpy(),
-            "skew": skew.to_numpy(),
-            "kurtosis": np.array([part.kurt() for part in parts], dtype=float),
-            "shape": [shape_label(s) for s in skew],
-        }
-    )
+    The quantiles of ``numeric_stats``, the histogram of ``numeric_bars`` and the outliers of
+    ``outlier_values`` use this same sample, so they agree with each other.
+    """
+    return sample_array(finite_values(series), n)
+
+
+def _numeric_row(name: str, series: pd.Series, sample_rows: int) -> dict[str, Any]:
+    """Row of ``numeric_stats`` for one column. Same definitions as pandas' ``describe``:
+    ``std`` with one degree of freedom, linear interpolation between quantiles, and pandas'
+    bias-corrected skewness and kurtosis.
+    """
+    raw = series.to_numpy(dtype="float64", na_value=np.nan)
+    finite_mask = np.isfinite(raw)
+    values = raw[finite_mask]
+    count = int(values.size)
+    picked = sample_array(values, sample_rows)
+    nan = float("nan")
+    if count:
+        quantiles = np.quantile(picked, PERCENTILES)
+        p5, q1, median, q3, p95 = (float(q) for q in quantiles)
+        mean = float(values.mean())
+        std = float(values.std(ddof=1)) if count > 1 else nan
+        low, high = q1 - TUKEY_K * (q3 - q1), q3 + TUKEY_K * (q3 - q1)
+        inside = values[(values >= low) & (values <= high)]
+        outliers = count - int(inside.size)
+        whisker_low = float(inside.min()) if inside.size else nan
+        whisker_high = float(inside.max()) if inside.size else nan
+        minimum, maximum = float(values.min()), float(values.max())
+        # pandas' estimators on the sample: a 200,000-value Series, a few milliseconds.
+        sampled = pd.Series(picked)
+        skew, kurtosis = float(sampled.skew()), float(sampled.kurt())
+    else:
+        p5 = q1 = median = q3 = p95 = mean = std = nan
+        whisker_low = whisker_high = minimum = maximum = skew = kurtosis = nan
+        outliers = 0
+    return {
+        "column": name,
+        "count": count,
+        "mean": mean,
+        "std": std,
+        # Coefficient of variation: spread relative to the size of the values.
+        "cv": std / abs(mean) if count and mean != 0 else nan,
+        "min": minimum,
+        "p5": p5,
+        "q1": q1,
+        "median": median,
+        "q3": q3,
+        "p95": p95,
+        "max": maximum,
+        "iqr": q3 - q1,
+        "whisker_low": whisker_low,
+        "whisker_high": whisker_high,
+        "outliers": outliers,
+        "outliers_pct": outliers / count * 100 if count else 0.0,
+        "zeros": int(np.count_nonzero(values == 0)),
+        "negatives": int(np.count_nonzero(values < 0)),
+        "infinite": int(np.count_nonzero(~finite_mask & ~np.isnan(raw))),
+        "skew": skew,
+        "kurtosis": kurtosis,
+        "shape": shape_label(skew),
+    }
 
 
 def with_unparsed(table: pd.DataFrame, unparsed: Mapping[str, int]) -> pd.DataFrame:
@@ -283,14 +312,14 @@ def numeric_bars(
         unique: Distinct values of the column (from ``BaseProfile``), to choose between both.
     """
     if unique <= bins:
-        counts = finite_values(series).value_counts().sort_index()
+        values, counts = np.unique(finite_values(series), return_counts=True)
         return Bars(
             tuple(int(c) for c in counts),
-            value_labels(counts.index),
+            value_labels(values.tolist()),
             per_value=True,
-            edges=tuple(float(v) for v in counts.index),
+            edges=tuple(float(v) for v in values),
         )
-    values = sample(finite_values(series), sample_rows).to_numpy()
+    values = numeric_sample(series, sample_rows)
     heights, edges = histogram(values, bins, stats["whisker_low"], stats["whisker_high"])
     labels = [f"{a:,.4g} to {b:,.4g}" for a, b in pairwise(edges)]
     return Bars(tuple(heights), tuple(labels), edges=tuple(edges))
@@ -298,40 +327,27 @@ def numeric_bars(
 
 def outlier_values(series: pd.Series, stats: pd.Series, limit: int, sample_rows: int) -> list:
     """Up to ``limit`` outliers of the sample, the most extreme first (R-P2, R-V2)."""
-    values = sample(finite_values(series), sample_rows)
+    values = numeric_sample(series, sample_rows)
     outside = values[(values < stats["whisker_low"]) | (values > stats["whisker_high"])]
-    distance = (outside - stats["median"]).abs().sort_values(ascending=False, kind="stable")
-    return [float(v) for v in outside.loc[distance.index[:limit]]]
+    # Stable, so equal distances keep the order of the sample.
+    order = np.argsort(-np.abs(outside - stats["median"]), kind="stable")[:limit]
+    return [float(v) for v in outside[order]]
 
 
 # Categorical and boolean
 
 
-def top_values(series: pd.Series, k: int) -> pd.DataFrame:
-    """The ``k`` most frequent values, plus one "(other N values)" row for the rest.
-
-    Columns: ``value``, ``count`` and ``pct`` (share of the non-missing values).
-    """
-    counts = value_counts(series)
-    total = counts.sum()
-    top = counts.head(k)
-    table = pd.DataFrame({"value": top.index.astype(str), "count": top.to_numpy()})
-    if len(counts) > k:
-        other = pd.DataFrame(
-            {"value": [f"(other {len(counts) - k} values)"], "count": [counts.iloc[k:].sum()]}
-        )
-        table = pd.concat([table, other], ignore_index=True)
-    table["pct"] = table["count"] / total * 100 if total else 0.0
-    return table
-
-
 def top_bars(series: pd.Series, k: int) -> tuple[Bars, int, int]:
     """Bars of the ``k`` most frequent values, and the distinct values and rows left out.
 
-    Unlike ``top_values``, the rest is not a bar: it usually adds up to far more rows than any
-    single value and would flatten the others.
+    The rest is not a bar: it usually adds up to far more rows than any single value and would
+    flatten the others.
     """
-    counts = value_counts(series)
+    return _top_bars(value_counts(series), k)
+
+
+def _top_bars(counts: pd.Series, k: int) -> tuple[Bars, int, int]:
+    """``top_bars`` from the output of ``value_counts``."""
     top, rest = counts.head(k), counts.iloc[k:]
     bars = Bars(tuple(int(c) for c in top), tuple(str(v) for v in top.index), True)
     return bars, len(rest), int(rest.sum())
@@ -410,7 +426,9 @@ def datetime_stats(
             (``LoadedDataset.unparsed``).
         now: Dates after it are counted in ``future``. Timezone-naive, like the dates (local
             clock time). ``None`` is the current time; a cached caller passes it, so the count
-            does not stay frozen at the moment it was cached.
+            does not stay frozen at the moment it was cached. Dates that had a timezone in the
+            file were converted to UTC (``schema.apply_schema``), so for them the count can be
+            off by the difference between UTC and local time.
     """
     now = pd.Timestamp.now() if now is None else now
     rows = []
@@ -434,10 +452,10 @@ def datetime_stats(
 
 def _frequency(values: pd.Series) -> str:
     """Usual spacing between consecutive distinct dates, in words. Exact, on every row."""
-    # Gaps between sorted dates; repeated dates give a gap of 0 and are dropped. Same result
-    # as np.unique + diff, but np.unique took 6 s on 7.3 M dates and the sort 0.9 s.
-    gaps = np.diff(np.sort(values.to_numpy()))
-    gaps = gaps[gaps > np.timedelta64(0, "s")]
+    # Gaps between the sorted distinct dates. ``unique`` (a hash table) first: dates repeat,
+    # so sorting the distinct ones took 30 ms on 3 M rows against 234 ms sorting every row.
+    distinct = np.sort(pd.unique(values.to_numpy()))
+    gaps = np.diff(distinct)
     if len(gaps) < 2:
         return ""
     days = np.median(gaps) / np.timedelta64(1, "D")
@@ -517,11 +535,16 @@ def _count_blank(series: pd.Series) -> int:
 
 
 def _first_non_blank(series: pd.Series) -> str:
-    """First value with some text, cut to ``EXAMPLE_WIDTH`` characters. Stops at the first."""
-    for value in series.dropna():
-        text = str(value)
-        if text.strip():
-            return text if len(text) <= EXAMPLE_WIDTH else text[: EXAMPLE_WIDTH - 1] + "…"
+    """First value with some text, cut to ``EXAMPLE_WIDTH`` characters.
+
+    Reads the column in chunks and stops at the first chunk with such a value: usually the
+    first one, instead of copying the whole column without its missing values.
+    """
+    for start in range(0, len(series), _EXAMPLE_CHUNK):
+        for value in series.iloc[start : start + _EXAMPLE_CHUNK].dropna():
+            text = str(value)
+            if text.strip():
+                return text if len(text) <= EXAMPLE_WIDTH else text[: EXAMPLE_WIDTH - 1] + "…"
     return ""
 
 
@@ -542,7 +565,7 @@ def text_examples(series: pd.Series, n: int) -> pd.DataFrame:
     """``n`` random values (fixed seed) and their length, as ``value`` and ``length`` (R-P7)."""
     # Pick first and convert after: converting a whole column to text is slow.
     values = series.dropna()
-    picked = values.sample(min(n, len(values)), random_state=0).astype(str)
+    picked = values.iloc[positions(len(values), min(n, len(values)))].astype(str)
     return pd.DataFrame({"value": picked.to_numpy(), "length": picked.str.len().to_numpy()})
 
 
@@ -555,7 +578,7 @@ def column_detail(
     kind: SemanticType,
     *,
     unique: int,
-    numeric: pd.DataFrame,
+    stats: pd.Series | None,
     sample_rows: int,
     outlier_limit: int,
     n_examples: int,
@@ -564,22 +587,25 @@ def column_detail(
 
     Args:
         unique: Distinct values of the column (from ``BaseProfile``).
-        numeric: Output of ``numeric_stats``; only read for numeric columns.
+        stats: Numeric columns only: the row of ``numeric_stats`` for this column.
         outlier_limit: Most outliers returned, to keep the chart light.
         n_examples: Example values returned for text and identifier columns.
     """
     series = df[name]
     if kind in NUMERIC_TYPES:
-        stats = numeric.set_index("column").loc[name]
+        if stats is None:
+            raise ValueError(f"Column '{name}' is numeric: its stats are needed.")
         return ColumnDetail(
             bars=numeric_bars(series, stats, unique, DETAIL_BINS, sample_rows),
             outliers=tuple(outlier_values(series, stats, outlier_limit, sample_rows)),
         )
     if kind in CATEGORICAL_TYPES:
-        bars, other_values, other_rows = top_bars(series, TOP_K)
+        # One count for the bars and the variants.
+        counts = value_counts(series)
+        bars, other_values, other_rows = _top_bars(counts, TOP_K)
         return ColumnDetail(
             bars=bars,
-            variants=tuple(tuple(g) for g in variant_groups(series)),
+            variants=tuple(tuple(g) for g in _variants(counts)),
             other_values=other_values,
             other_rows=other_rows,
         )
@@ -600,6 +626,7 @@ def column_overview(
     base: BaseProfile,
     numeric: pd.DataFrame,
     sample_rows: int,
+    workers: int = 1,
 ) -> pd.DataFrame:
     """One short row per column: type, missing, distinct values and a distribution.
 
@@ -614,12 +641,12 @@ def column_overview(
     Args:
         base: Output of ``profile.base_profile(df)``.
         numeric: Output of ``numeric_stats`` for the numeric columns.
+        workers: Threads, one column each. Same result.
     """
     table = base.columns.set_index("column")
     numeric = numeric.set_index("column")
-    rows = []
-    for column in schema.columns:
-        name, kind = column.name, column.semantic_type
+
+    def row(name: str, kind: SemanticType) -> dict[str, Any]:
         stats = table.loc[name]
         has_values = int(stats["missing"]) < base.n_rows
         bars = (
@@ -627,15 +654,15 @@ def column_overview(
             if has_values
             else Bars()
         )
-        rows.append(
-            {
-                "column": name,
-                "semantic_type": kind.value,
-                "missing_pct": float(stats["missing_pct"]),
-                "unique_pct": float(stats["unique_pct"]),
-                "distribution": list(bars.counts),
-            }
-        )
+        return {
+            "column": name,
+            "semantic_type": kind.value,
+            "missing_pct": float(stats["missing_pct"]),
+            "unique_pct": float(stats["unique_pct"]),
+            "distribution": list(bars.counts),
+        }
+
+    rows = map_columns(lambda c: row(c.name, c.semantic_type), schema.columns, workers)
     return pd.DataFrame(
         rows, columns=["column", "semantic_type", "missing_pct", "unique_pct", "distribution"]
     )
