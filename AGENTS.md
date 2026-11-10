@@ -14,6 +14,7 @@ uv run litmetrics --style 2                   # run it with style variant 2 (doc
 uv run pytest -q                              # all tests (~2 s)
 uv run ruff format src tests                  # format
 uv run ruff check src tests                   # lint
+uv run python scripts/bench_profile.py        # time Load + Profile on 3 M rows (docs/performance.md)
 ```
 
 - `uv run litmetrics` = `streamlit run src/litmetrics/app.py` (entry point in `__init__.py`).
@@ -29,11 +30,13 @@ src/litmetrics/
   config.py       Frozen dataclasses with settings, read as class attributes (LoadConfig.preview_rows)
   core/           Pure logic. NEVER imports streamlit
     io/base.py      Source, LoadedDataset, ReadError, Loader protocol, compute_dataset_id
-    io/sniffing.py  Detects separator, encoding and header -> CsvOptions
+    io/sniffing.py  Detects separator, encoding, header and decimal mark -> CsvOptions
     io/csv_loader.py
     schema.py       Semantic type of each column, and conversion to its dtype at load time
     profile.py      Base pass (missing, distinct, duplicates), sampling, correlation, issues
     columns.py      Column table of Profile: overview, per-type tables, data of one column
+    sampling.py     Random samples with a fixed seed (numpy positions), shared by every module
+    parallel.py     map_columns: one column per thread, for numpy work only (R-P8)
   ui/             The only package that imports streamlit
     state.py        The ONLY module that touches st.session_state
     cache.py        Cache wrappers around core functions (load_dataset, Profile sections)
@@ -41,10 +44,12 @@ src/litmetrics/
     echarts.py      The only module importing streamlit_echarts: ``echarts.show`` draws themed charts
     theme.py        Reads the theme (both modes): CSS variables --lm-* and chart colors
     style.py        Injects the variant stylesheet, page header and cards (``style.card``)
+    styles_base.css Rules shared by style variants 0-3, loaded before the variant's own
     styles.css      CSS of style variant 0; styles_<n>.css of variant n (docs/styling.md)
     pages/          One module per page
 tests/core/       pytest, mirrors src/litmetrics/core
 tests/ui/         AppTest smoke tests of the pages and tests of ui/charts.py
+scripts/          bench_profile.py: benchmark of Load and Profile
 docs/             Reference docs: data-loading.md (Load flow), performance.md (rules R-*),
                   styling.md (themes, variants, CSS selectors)
 drafts/           Design notes and plans (Spanish). Intent, not truth: the code wins
@@ -62,8 +67,10 @@ drafts/           Design notes and plans (Spanish). Intent, not truth: the code 
   it is cleared when a new dataset is loaded.
 - Cache wrappers in `ui/cache.py` take `dataset_id` first and the data as `_df` / `_source`
   (underscore = not hashed). Only call them with a `dataset_id` that matches the data.
-  Other arguments must be hashable: frozen dataclasses with tuples, not lists. When columns are
-  left out of the data, pass `cache.view_id(dataset_id, skipped)` instead of `dataset_id`.
+  Other arguments must be hashable: frozen dataclasses with tuples, not lists. Measures of
+  single columns take the id of the whole dataset with the whole DataFrame and the columns as
+  `names`; only what depends on the set of columns (duplicate rows, rows with missing values)
+  takes `cache.view_id(dataset_id, skipped)` with the DataFrame without those columns.
 - The loaded dataset is cached with `st.cache_resource` and shared, not copied: never modify it.
 - Code that touches every row (loading, profiling, charts of a whole column) follows the rules
   in `docs/performance.md` and cites the rule it applies (`R-L2`, `R-C1`...).

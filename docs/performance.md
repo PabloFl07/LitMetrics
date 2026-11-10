@@ -39,14 +39,28 @@ explaining the reason again, for example: *"cache this per section, not per meas
   than the default reader (0.6 s vs 2.2 s for 1 M rows). Parquet is 6× faster (0.35 s). If the
   pyarrow engine does not support a read option, fall back to the C engine only in that case.
 - **R-L2. Convert types once, when loading or when the schema is confirmed.**
-  - Dates stored as text are parsed once, with a fixed format if one was detected (0.5 s per
-    million rows with a fixed format, 0.7 s with `format="mixed"`). Functions in `core/` never
-    call `pd.to_datetime` on a column again.
-  - Text with few distinct values (`categorical` columns in the schema) is converted to
-    `category`. A `groupby` on `category` is 2.5× faster (37 ms vs 95 ms) and uses less memory.
+  - Dates stored as text are parsed once, with a fixed format if one was detected. Functions in
+    `core/` never call `pd.to_datetime` on a column again.
+  - **Parse each distinct value once** (`schema._by_unique`): `pd.factorize`, convert the
+    distinct values, spread them back with the codes. On pandas 3 `pd.to_datetime` on a `str`
+    column ignores its own cache: 3.9 s for 3 M dates with a fixed format, against 0.1 s for
+    the 1,500 distinct ones. Same result, value for value. Numbers stored as text go the same
+    way. When every value is different it costs one `factorize` (75 ms) more.
+  - Text with few distinct values (`categorical` and `boolean` columns in the schema) is
+    converted to `category`. A `groupby` on `category` is 2.5× faster (37 ms vs 95 ms), a
+    `value_counts` 6× faster (14 ms vs 87 ms), and it uses less memory.
+  - Type inference looks at a random sample of each column (`sampling.sample`), never at its
+    first rows: in a sorted file they are not like the rest.
 - **R-L3. A stable `dataset_id`.** It is computed once at load time (a hash of the file bytes,
   or name + size + modification time) and is the key of the whole cache. If the data changes (a
   persistent filter, a cleaning step), the result is a new dataset with a new id.
+- **R-L4. Check the encoding without decoding the file.** `bytes.isascii()` takes 58 ms on
+  569 MB and allocates nothing; `data.decode("utf-8")` takes 146 ms and builds a 569 MB string
+  (more if the text is not ASCII). Files that are not ASCII are decoded in 64 MB chunks with an
+  incremental decoder: 246 ms, 64 MB at most.
+- **R-L5. Give Arrow's memory back after reading.** The pyarrow engine allocates through Arrow's
+  pool, which keeps freed blocks. After reading 569 MB the process held 1.9 GB more for a
+  525 MB DataFrame; `pa.default_memory_pool().release_unused()` brings it down to 0.95 GB.
 
 ## 2. Cache (`ui/cache.py`)
 
@@ -69,8 +83,8 @@ explaining the reason again, for example: *"cache this per section, not per meas
   - Profile functions: `max_entries=3`, the last datasets opened.
   - Visualization functions: `max_entries` from 32 to 64, because there are many combinations
     of parameters (R-V3).
-  - As a global safety net, set `server.maxCacheDataSize` in `.streamlit/config.toml`. For a
-    specific function that may grow, use `max_size`, for example `max_size="100MB"`.
+  - Streamlit 1.66 has no limit by size (`max_size`, `server.maxCacheDataSize` do not exist):
+    `max_entries` is the only bound. Keep entries small (R-C1) so that the count is enough.
 - **R-C4. The dataset is stored in one place, without copies.** It goes in `st.session_state`
   (one per user) or in `st.cache_resource` (shared, no copy). Nothing modifies it in place: the
   functions in `core/` are pure and return new objects.
@@ -106,7 +120,9 @@ explaining the reason again, for example: *"cache this per section, not per meas
   missing values per column, missing values per row, distinct values, duplicates, memory and
   dtypes. The sections start from its result, so no section calls `df.isna()` or `nunique()`
   over the whole dataset on its own.
-- **R-P2. Sample what is expensive, count what is cheap.**
+- **R-P2. Sample what is expensive, count what is cheap.** Samples come from
+  `core/sampling.py`: positions drawn with numpy (8 ms on 3 M rows, against 90 ms for
+  `DataFrame.sample`), so the same column always gives the same sample.
 
   | On the full data (exact) | On a sample with a fixed seed |
   |---|---|
@@ -116,16 +132,30 @@ explaining the reason again, for example: *"cache this per section, not per meas
   and 0.005 in Spearman. The sample size goes in `ProfileConfig`. The UI says when a result
   comes from a sample, for example *"computed on 200,000 of 3,000,000 rows"*. If the dataset fits
   in the sample, all of it is used.
-- **R-P3. Spearman always on the sample.** It is the slowest operation in Profile: 27 s with
-  3 M rows and 12 columns, vs 1.3 s on the sample. Computing `rank()` once and then Pearson gives
-  the same result in half the time, but that is still too slow.
+- **R-P3. Correlation with matrix products; Spearman always on the sample.** `DataFrame.corr`
+  with missing values works pair by pair. Four matrix products (count, sums, sums of squares
+  and cross products over the rows each pair shares) give the same matrix: Pearson 0.57 s vs
+  1.9 s on 3 M rows and 12 columns, and more precise (pandas is 2.5e-8 off on values near
+  1e12; centring the columns first avoids it). Spearman ranks each column once and then does
+  the same: 0.48 s vs 4.4 s on a 200,000-row sample. Ranking once per column, not per pair,
+  differs from pandas when values are missing (6e-6 with 10% missing at random). On every row
+  Spearman still takes 9.5 s, so it stays on the sample.
 - **R-P4. Duplicates and distinct values are the most expensive exact counts.**
   - `df.duplicated()`: 3.9 s. With `pd.util.hash_pandas_object(df, index=False).duplicated()`,
-    2.6 s.
-  - `nunique()` on the numeric columns: 2.1 s. With `np.unique` per column, 0.35 s.
+    2.6 s. Skipped when a column has a different value in every row.
+  - Distinct values: sort numbers, hash the rest. On 3 M rows:
+
+    | Column | `value_counts` (hash) | `np.sort` + compare neighbours |
+    |---|---:|---:|
+    | float, all distinct | 449 ms | 74 ms |
+    | int, random ids | 211 ms | 97 ms |
+    | int, 10,000 values | 22 ms | 43 ms |
+    | date, 1,500 values | 23 ms | 240 ms |
+
+    `np.unique` is not the same: it was 5-6 s on 7.3 M ids and dates.
   - Both are computed only once, in the base pass (R-P1). To skip constant columns, check
-    `std() > 0` or reuse the distinct counts of the base pass instead of calling `nunique()`
-    again.
+    `min < max` on the finite values or reuse the distinct counts of the base pass instead of
+    calling `nunique()` again.
 - **R-P5. Vectorize over rows, loop only over columns.** Going through 100,000 rows with
   `itertuples` takes 370 ms. A Python loop over *columns* (`for name in df`) is fine. A loop over
   *rows*, `apply(axis=1)` or `iterrows` in `core/` is not.
@@ -133,6 +163,12 @@ explaining the reason again, for example: *"cache this per section, not per meas
   other sections and does not recompute them.
 - **R-P7. Row previews are capped.** Rows with missing values, text examples and the outliers
   drawn in a boxplot use `head(n)` or `sample(n)`, with `n` in `ProfileConfig`.
+- **R-P8. Threads per column, only where the GIL is released.** `core/parallel.map_columns`
+  runs one column per thread (`ProfileConfig.workers`, up to 8). numpy sorting and arithmetic
+  release the GIL: 8 float columns counted by sorting take 182 ms in 8 threads, 590 ms in one.
+  pandas' hash tables do not: 8 `value_counts` take 3.1 s in threads and 2.9 s without. Numeric
+  summaries (`numeric_stats`) are computed with numpy per column for the same reason: 185 ms
+  in threads against 2.8 s for the same measures on a DataFrame.
 
 ## 5. Visualization
 
@@ -185,11 +221,34 @@ style spec (colors, title, axes, theme, legend)     ──►  build_option()  p
 The figures in this document are indicative. They were taken on a synthetic dataset of 3 M rows
 and 17 columns (about 500 MB in memory): 8 float columns with up to 10% missing values,
 4 integer columns, 2 low-cardinality text columns, 1 unique text code, 1 short free-text column
-and 1 datetime column. `scripts/bench_profile.py` generates a dataset with the same structure.
+and 1 datetime column. `scripts/bench_profile.py` generates a dataset with the same structure
+and times every step from reading the CSV to the Profile page:
 
-Environment: Python 3.13, pandas 3.0, NumPy 2.5, pyarrow 26, Streamlit 1.67, on a 2-core Linux
-machine. Absolute times will differ on other machines; the ratios between operations are what
-the rules rely on.
+```bash
+uv run python scripts/bench_profile.py [--rows 3000000] [--csv data/bench.csv]
+```
+
+Environment of the table below: Python 3.13, pandas 3.0, NumPy 2.5, pyarrow 26, Streamlit 1.67,
+on a 2-core Linux machine. Absolute times will differ on other machines; the ratios between
+operations are what the rules rely on.
+
+### Load and Profile, before and after the rules R-L2 to R-P8
+
+3 M rows, 18 columns (569 MB CSV), Python 3.14, pandas 3.1, NumPy 2.5, pyarrow 26, 20-core Linux,
+`ProfileConfig.workers = 8`.
+
+| Step | Before | After |
+|---|---:|---:|
+| Check the encoding | 158 ms, +568 MB | 36 ms, +0 MB |
+| Read the CSV (memory kept afterwards) | 541 ms (+1,924 MB) | 349 ms (+948 MB) |
+| `infer_schema` | 1,123 ms | 490 ms |
+| `apply_schema` | 4,129 ms | 184 ms |
+| `base_profile` | 3,694 ms | 478 ms |
+| `numeric_stats` | 2,779 ms, +1,325 MB | 185 ms |
+| `column_overview` | 1,254 ms | 88 ms |
+| Pearson | 1,928 ms, +985 MB | 565 ms |
+| Spearman (200,000-row sample) | 4,246 ms | 477 ms |
+| Rerun of any Profile tab with the cache | 17-31 ms | 17-31 ms |
 
 | Operation | Time |
 |---|---|
