@@ -4,20 +4,23 @@ import streamlit as st
 
 from litmetrics.config import PageConfig
 from litmetrics.ui import state, style
-from litmetrics.ui.pages.home import home
+from litmetrics.ui.pages.home import home_page
 from litmetrics.ui.pages.load import load_page
 from litmetrics.ui.pages.profile import profile_page
-from litmetrics.ui.pages.visualize import visualize
+from litmetrics.ui.pages.visualize import visualize_page
 
 
 def build_pages() -> tuple[st.Page, ...]:
     """Pages shown in the top navigation, in order. ``url_path`` is the URL of each page."""
     return (
-        st.Page(home, title="Home", icon=":material/home:", default=True, url_path="home"),
+        st.Page(home_page, title="Home", icon=":material/home:", default=True, url_path="home"),
         st.Page(load_page, title="Load", icon=":material/upload_file:", url_path="load"),
         st.Page(profile_page, title="Profile", icon=":material/query_stats:", url_path="profile"),
         st.Page(
-            visualize, title="Visualization", icon=":material/bar_chart:", url_path="visualize"
+            visualize_page,
+            title="Visualization",
+            icon=":material/bar_chart:",
+            url_path="visualize",
         ),
     )
 
