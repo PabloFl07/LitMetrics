@@ -6,22 +6,30 @@ categorical column can be used to group, etc. Here that is guessed with simple h
 
 Once guessed, ``apply_schema`` converts the columns to the dtype of their type, once, when the
 file is loaded (R-L2 in docs/performance.md): dates and numbers stored as text become
-``datetime64`` and ``float64``/``int64``, and text categories become ``category``. Nothing after
-loading has to parse them again.
+``datetime64`` and ``float64``/``int64``, and text categories and booleans become ``category``.
+Nothing after loading has to parse them again.
+
+Cost on large files: the checks that parse values (numbers, dates, spaces) look at a random
+sample of each column (``INFER_SAMPLE``), not at its first rows, which in a sorted file are not
+like the rest. Conversions parse each distinct value once (``_by_unique``): dates repeat, and
+``pd.to_datetime`` on 3 M text dates took 3.9 s against 0.1 s for the 1,500 distinct ones.
 """
 
 import dataclasses
 import re
 import warnings
-from collections.abc import Iterable, Mapping
+from collections.abc import Callable, Iterable, Mapping
 from dataclasses import dataclass
 from enum import StrEnum
+from functools import cached_property
 
+import numpy as np
 import pandas as pd
 from pandas.api import types as ptypes
 from pandas.tseries.api import guess_datetime_format
 
 from litmetrics.core.io.base import LoadedDataset
+from litmetrics.core.sampling import sample
 
 # A text column is categorical if it has at most this many distinct values...
 CATEGORICAL_MAX_UNIQUE = 50
@@ -33,8 +41,11 @@ IDENTIFIER_MIN_ROWS = 20
 # Share of distinct values (over the non-missing ones) from which a column counts as a key.
 # Below 1 because dirty files repeat some ids, usually through duplicated rows.
 IDENTIFIER_MIN_DISTINCT = 0.95
-# Values checked to decide whether a text column holds dates or numbers.
-DATETIME_SAMPLE = 200
+# Random values checked to decide whether a text column holds dates or numbers.
+INFER_SAMPLE = 200
+# Random values checked to decide whether a text column has spaces (identifiers have almost
+# none). Checking every value took 227 ms on 3 M codes; the share is stable long before that.
+SPACES_SAMPLE = 2_000
 # Fraction of those values that must be numbers for a text column to be numeric. Below 1
 # because dirty files write some numbers as words or with units ("cincuenta", "41 años").
 NUMERIC_MIN_PARSED = 0.95
@@ -75,12 +86,23 @@ class Schema:
 
     columns: tuple[ColumnSchema, ...]
 
+    @cached_property
+    def _types(self) -> dict[str, SemanticType]:
+        # cached_property writes the instance __dict__ directly, so it works on a frozen
+        # dataclass. It is not a field: equality, hashing and cache keys ignore it.
+        return {c.name: c.semantic_type for c in self.columns}
+
     def type_of(self, name: str) -> SemanticType:
         """Semantic type of column ``name``. Raise ``KeyError`` if there is no such column."""
-        for column in self.columns:
-            if column.name == name:
-                return column.semantic_type
-        raise KeyError(name)
+        return self._types[name]
+
+    def names_of(self, kinds: Iterable[SemanticType]) -> tuple[str, ...]:
+        """Names of the columns whose semantic type is one of ``kinds``, in dataset order.
+
+        Always the same tuple for the same schema and kinds, so it can be part of a cache key.
+        """
+        wanted = set(kinds)
+        return tuple(c.name for c in self.columns if c.semantic_type in wanted)
 
 
 def infer_schema(df: pd.DataFrame) -> Schema:
@@ -121,7 +143,8 @@ def infer_semantic_type(series: pd.Series) -> SemanticType:
     if values.empty:
         return SemanticType.TEXT
     unique = values.nunique()
-    if unique <= 2 and set(values.str.lower().unique()) <= _BOOLEAN_TOKENS:
+    # Lowercase the (at most two) distinct values, not every row.
+    if unique <= 2 and {v.lower() for v in values.unique()} <= _BOOLEAN_TOKENS:
         return SemanticType.BOOLEAN
     if _looks_numeric(values):
         return SemanticType.NUMERIC
@@ -132,7 +155,7 @@ def infer_semantic_type(series: pd.Series) -> SemanticType:
     if (
         len(values) >= IDENTIFIER_MIN_ROWS
         and mostly_distinct(unique, len(values))
-        and values.str.contains(r"\s").mean() <= 1 - IDENTIFIER_MIN_DISTINCT
+        and sample(values, SPACES_SAMPLE).str.contains(r"\s").mean() <= 1 - IDENTIFIER_MIN_DISTINCT
     ):
         return SemanticType.IDENTIFIER
     if unique <= CATEGORICAL_MAX_UNIQUE and unique <= CATEGORICAL_MAX_RATIO * len(values):
@@ -163,22 +186,22 @@ def _looks_numeric(values: pd.Series) -> bool:
     "26.809,81 €"). A column with leading zeros ("01234") holds codes such as postal codes,
     which lose their zeros as numbers: it stays text.
     """
-    sample = values.head(DATETIME_SAMPLE)
-    if pd.to_numeric(sample, errors="coerce").notna().mean() < NUMERIC_MIN_PARSED:
+    picked = sample(values, INFER_SAMPLE)
+    if pd.to_numeric(picked, errors="coerce").notna().mean() < NUMERIC_MIN_PARSED:
         return False
     # Every value, not the sample: a postal code column may have only a couple of them.
     return not values.str.match(r"\s*0\d").any()
 
 
 def _looks_like_datetime(values: pd.Series) -> bool:
-    """Say whether almost all of the first values of a text column parse as dates."""
-    sample = values.head(DATETIME_SAMPLE)
+    """Say whether almost all of a random sample of a text column parses as dates."""
+    picked = sample(values, INFER_SAMPLE)
     # Every date has three groups of digits ("2024-01-02") or a 4-digit year next to other text
     # ("Jan 2024", "2024-01"). Values without that shape count as not dates even if pandas
     # would parse them: words ("today"), bare numbers ("2021"), ranges ("10-20"). The check
     # also skips the slow parse for most text columns.
-    groups = sample.str.count(r"\d+")
-    year = sample.str.contains(r"\d{4}") & ~sample.str.fullmatch(r"\d+")
+    groups = picked.str.count(r"\d+")
+    year = picked.str.contains(r"\d{4}") & ~picked.str.fullmatch(r"\d+")
     shaped = (groups >= 3) | year
     if shaped.mean() < DATETIME_MIN_PARSED:
         return False
@@ -186,8 +209,8 @@ def _looks_like_datetime(values: pd.Series) -> bool:
     # utc=True: without it, values with different UTC offsets raise instead of parsing.
     with warnings.catch_warnings():
         warnings.simplefilter("ignore")
-        parsed = pd.to_datetime(sample[shaped], errors="coerce", format="mixed", utc=True)
-    return parsed.notna().sum() / len(sample) >= DATETIME_MIN_PARSED
+        parsed = pd.to_datetime(picked[shaped], errors="coerce", format="mixed", utc=True)
+    return parsed.notna().sum() / len(picked) >= DATETIME_MIN_PARSED
 
 
 # Converting the columns
@@ -213,11 +236,13 @@ def apply_schema(df: pd.DataFrame, schema: Schema) -> TypedFrame:
     """Convert each column of ``df`` to the dtype of its semantic type. ``df`` is not changed.
 
     - Dates: ``datetime64`` without timezone. Text is parsed with a fixed format when one fits
-      the first values (faster and stricter than guessing each value); values that are not
-      dates become missing and are counted. Dates with a timezone are converted to UTC.
+      a random sample of the values (faster and stricter than guessing each value); values
+      that are not dates become missing and are counted. Dates with a timezone are converted to UTC.
     - Numbers stored as text: ``float64`` (``int64`` if all are integers and none is missing).
       Values that are not numbers become missing and are counted.
-    - Categorical text: ``category``, which makes grouping faster and uses less memory.
+    - Categorical text and boolean text ("yes"/"no"): ``category``, which makes counting and
+      grouping faster (14 ms against 87 ms per ``value_counts`` on 3 M rows) and uses less
+      memory. Boolean text keeps its own labels instead of becoming True/False.
     - Everything else is kept as it is.
     """
     # Shallow copy: with copy-on-write, assigning a column here never changes ``df``.
@@ -232,15 +257,42 @@ def apply_schema(df: pd.DataFrame, schema: Schema) -> TypedFrame:
                 unparsed[name] = int(series.notna().sum() - dates.notna().sum())
             typed[name] = dates
         elif kind is SemanticType.NUMERIC and not ptypes.is_numeric_dtype(series):
-            numbers = pd.to_numeric(series, errors="coerce")
+            numbers = _by_unique(series, lambda u: pd.to_numeric(u, errors="coerce"))
             unparsed[name] = int(series.notna().sum() - numbers.notna().sum())
             typed[name] = numbers
-        elif kind is SemanticType.CATEGORICAL and not isinstance(series.dtype, pd.CategoricalDtype):
+        elif _is_text_category(series, kind):
             typed[name] = series.astype("category")
     columns = tuple(
         dataclasses.replace(c, pandas_dtype=str(typed[c.name].dtype)) for c in schema.columns
     )
     return TypedFrame(typed, Schema(columns), unparsed)
+
+
+def _is_text_category(series: pd.Series, kind: SemanticType) -> bool:
+    """Whether ``series`` is text that ``apply_schema`` stores as ``category``."""
+    if isinstance(series.dtype, pd.CategoricalDtype) or ptypes.is_bool_dtype(series):
+        return False
+    return kind in (SemanticType.CATEGORICAL, SemanticType.BOOLEAN)
+
+
+def _by_unique(series: pd.Series, convert: Callable[[pd.Series], pd.Series]) -> pd.Series:
+    """``convert`` applied to each distinct value of ``series`` once, then spread to every row.
+
+    Same result as ``convert(series)``: missing values stay missing, and integers stay
+    ``int64`` only when nothing is missing. On columns where every value is different it
+    costs one ``factorize`` (75 ms on 3 M rows) more than converting directly.
+    """
+    codes, uniques = pd.factorize(series)
+    converted = convert(pd.Series(uniques)).to_numpy()
+    missing = codes < 0
+    if missing.any():
+        if converted.dtype.kind in "iub":
+            converted = converted.astype("float64")
+        # Missing rows point at one more slot, holding the missing value of the dtype.
+        na = np.array(["NaT"] if converted.dtype.kind == "M" else [np.nan], dtype=converted.dtype)
+        converted = np.append(converted, na)
+        codes = np.where(missing, converted.size - 1, codes)
+    return pd.Series(converted[codes], index=series.index, name=series.name)
 
 
 def prepare_dataset(dataset: LoadedDataset) -> tuple[LoadedDataset, Schema]:
@@ -260,33 +312,40 @@ def _to_dates(series: pd.Series) -> pd.Series:
         dates = series
     else:
         fmt, dayfirst = _date_format(series)
+
         # utc=True: a column mixing UTC offsets cannot be parsed otherwise. Values without an
         # offset are taken as UTC, so dropping the timezone below gives them back unchanged.
+        def parse(values: pd.Series) -> pd.Series:
+            parsed = pd.to_datetime(
+                values, errors="coerce", format=fmt, dayfirst=dayfirst, utc=True
+            )
+            return parsed.dt.tz_convert(None)
+
         with warnings.catch_warnings():
             warnings.simplefilter("ignore")
-            dates = pd.to_datetime(series, errors="coerce", format=fmt, dayfirst=dayfirst, utc=True)
+            dates = _by_unique(series, parse)
     if getattr(dates.dt, "tz", None) is not None:
         dates = dates.dt.tz_convert(None)
     return dates
 
 
 def _date_format(series: pd.Series) -> tuple[str, bool]:
-    """Format that reads the first values, and whether the day goes before the month.
+    """Format that reads a random sample of the values, and whether the day goes first.
 
-    The first value is guessed in both day/month orders, and the order that reads more of the
-    first values wins (``DATE_DAYFIRST`` on a tie). That fixed format reads the whole column
+    One value is guessed in both day/month orders, and the order that reads more of the
+    sample wins (``DATE_DAYFIRST`` on a tie). That fixed format reads the whole column
     in one order: "mixed" alone would read "01/02/2024" as January and "13/02/2024" as
     February. If no format reads enough values, it returns ``"mixed"`` with the day/month
     order of the best guess.
     """
-    sample = series.dropna().astype(str).head(DATETIME_SAMPLE)
-    if sample.empty:
+    picked = sample(series.dropna().astype(str), INFER_SAMPLE)
+    if picked.empty:
         return "mixed", False
     # guess_datetime_format warns about ambiguous day/month orders; the scores below decide.
     with warnings.catch_warnings():
         warnings.simplefilter("ignore")
-        month_first = guess_datetime_format(sample.iloc[0])
-        day_first = guess_datetime_format(sample.iloc[0], dayfirst=True)
+        month_first = guess_datetime_format(picked.iloc[0])
+        day_first = guess_datetime_format(picked.iloc[0], dayfirst=True)
         # A date that starts with the year is year-month-day, never year-day-month.
         prefer_day = DATE_DAYFIRST and not (month_first or "").startswith("%Y")
         ordered = [day_first, month_first] if prefer_day else [month_first, day_first]
@@ -294,7 +353,7 @@ def _date_format(series: pd.Series) -> tuple[str, bool]:
         if not candidates:
             return "mixed", prefer_day
         scores = [
-            pd.to_datetime(sample, errors="coerce", format=f, utc=True).notna().mean()
+            pd.to_datetime(picked, errors="coerce", format=f, utc=True).notna().mean()
             for f in candidates
         ]
     # max keeps the first of equal scores, so the preferred order wins ties.
