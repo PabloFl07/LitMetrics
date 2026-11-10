@@ -8,6 +8,7 @@ whole column (R-V2 in docs/performance.md).
 from dataclasses import dataclass
 from typing import Any
 
+import numpy as np
 import pandas as pd
 
 # Milliseconds of the entry animation of the inspector charts.
@@ -80,11 +81,12 @@ class Mark:
 def heatmap_options(matrix: pd.DataFrame, colors: ChartColors) -> dict[str, Any]:
     """Heatmap of a square correlation matrix. Undefined cells are left empty."""
     labels = [str(c) for c in matrix.columns]
+    values = matrix.to_numpy(dtype=float)
     data = [
-        [j, i, round(float(matrix.iloc[i, j]), 2)]
+        [j, i, round(float(values[i, j]), 2)]
         for i in range(len(labels))
         for j in range(len(labels))
-        if pd.notna(matrix.iloc[i, j])
+        if not np.isnan(values[i, j])
     ]
     return {
         "tooltip": {"position": "top"},
@@ -378,7 +380,10 @@ def _vertical_gradient(top: str, bottom: str, opacity: float = 1.0) -> dict[str,
 
 
 def with_alpha(color: str, opacity: float) -> str:
-    """``#rrggbb`` as ``rgba(...)`` with ``opacity``; unchanged when fully opaque."""
+    """``#rrggbb`` as ``rgba(...)`` with ``opacity``; unchanged when fully opaque.
+
+    Only ``#rrggbb``: ``theme.palette`` rejects any other format when the theme is read.
+    """
     if opacity >= 1:
         return color
     r, g, b = (int(color[i : i + 2], 16) for i in (1, 3, 5))

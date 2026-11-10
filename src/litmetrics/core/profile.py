@@ -6,8 +6,10 @@ and ``ui/cache.py`` caches them per dataset.
 Built for large datasets (rules in docs/performance.md):
 - ``base_profile`` is the only pass over the whole data for the cheap, exact counts (R-P1).
   Every section starts from its result instead of calling ``isna`` or ``nunique`` again.
-- Expensive measures run on ``sample(df, n)``, a sample with a fixed seed (R-P2). Spearman is
-  always computed on it (R-P3).
+- Expensive measures run on ``sampling.sample(df, n)``, a sample with a fixed seed (R-P2).
+  Spearman is always computed on it (R-P3).
+- Correlation is computed with matrix products over the rows where both columns have a value,
+  not pair by pair: same result as ``DataFrame.corr``, 3.6x faster for Pearson (R-P3).
 """
 
 from collections.abc import Sequence
@@ -19,12 +21,11 @@ import numpy as np
 import pandas as pd
 from pandas.api import types as ptypes
 
+from litmetrics.core.parallel import map_columns
+from litmetrics.core.sampling import positions
 from litmetrics.core.schema import IDENTIFIER_MIN_ROWS, Schema, SemanticType, mostly_distinct
 
 type CorrelationMethod = Literal["pearson", "spearman"]
-
-# Seed of every sample, so the same dataset always gives the same results.
-SAMPLE_SEED = 0
 
 
 @dataclass(frozen=True, eq=False)
@@ -99,31 +100,22 @@ class CorrelationResult:
     rows_used: int
 
 
-# Sampling
-
-
-def sample[T: (pd.DataFrame, pd.Series)](data: T, n: int) -> T:
-    """``n`` random rows of ``data`` with a fixed seed, or all of it if it has ``n`` or fewer.
-
-    The seed is the same for every call, so a DataFrame and any of its columns are sampled on
-    the same rows.
-    """
-    if len(data) <= n:
-        return data
-    return data.sample(n=n, random_state=SAMPLE_SEED)
-
-
 # Base pass
 
 
-def base_profile(df: pd.DataFrame) -> BaseProfile:
-    """Missing values, distinct values, duplicates and memory of ``df``, exactly."""
+def base_profile(df: pd.DataFrame, workers: int = 1) -> BaseProfile:
+    """Missing values, distinct values, duplicates and memory of ``df``, exactly.
+
+    Args:
+        workers: Threads for the distinct counts (``parallel.map_columns``). Only the numeric
+            columns, counted by sorting, run in parallel; it gives back the same result.
+    """
     n_rows = len(df)
     missing = df.isna()
     missing_by_column = missing.sum().to_numpy()
-    per_row = missing.sum(axis=1).value_counts().sort_index()
+    per_row = np.bincount(missing.to_numpy().sum(axis=1), minlength=1) if n_rows else []
     non_missing = n_rows - missing_by_column
-    counted = [distinct_and_repeated(series) for _, series in df.items()]
+    counted = map_columns(distinct_and_repeated, (series for _, series in df.items()), workers)
     unique = np.array([u for u, _ in counted], dtype=np.int64)
     repeated = np.array([r for _, r in counted], dtype=np.int64)
     columns = pd.DataFrame(
@@ -137,6 +129,8 @@ def base_profile(df: pd.DataFrame) -> BaseProfile:
             "repeated": repeated,
         }
     )
+    # Only the counts that occur: how many rows have 0, 1, 2... missing values.
+    occurs = np.flatnonzero(per_row)
     # A column with a different value in every row (an id) makes every row different: no
     # need to compare whole rows, the slowest count of all (R-P4).
     all_distinct = n_rows > 0 and bool((unique == n_rows).any())
@@ -144,7 +138,7 @@ def base_profile(df: pd.DataFrame) -> BaseProfile:
         n_rows=n_rows,
         columns=columns,
         missing_per_row=pd.DataFrame(
-            {"missing_in_row": per_row.index.to_numpy(), "rows": per_row.to_numpy()}
+            {"missing_in_row": occurs, "rows": np.asarray(per_row, dtype=np.int64)[occurs]}
         ),
         duplicate_rows=0 if all_distinct else _count_duplicate_rows(df),
         memory_bytes=int(df.memory_usage(deep=True).sum()),
@@ -154,14 +148,26 @@ def base_profile(df: pd.DataFrame) -> BaseProfile:
 def distinct_and_repeated(series: pd.Series) -> tuple[int, int]:
     """Distinct non-missing values of a column, and how many values appear more than once.
 
-    Both come from one ``value_counts`` (a hash table), instead of ``nunique`` here and
-    ``duplicated`` in the text table.
+    Numbers are counted by sorting (``_sorted_counts``) and everything else with pandas' hash
+    table (``value_counts``). Measured on 3 M rows (docs/performance.md, R-P4):
 
-    Deviation from R-P4, measured (Principle 4): with pandas 3.1 and numpy 2.5, on 7.3 M rows,
-    ``np.unique`` took 5.4 s on an id column and 6.0 s on a date column, against 0.2 s and 1.0 s
-    for pandas' hash-based counting; ``np.unique`` sorts, and only wins on columns with very few
-    distinct values (50 ms against 70 ms).
+    | column | hash | sort |
+    |---|---:|---:|
+    | float, all distinct | 449 ms | 74 ms |
+    | int, random ids | 211 ms | 97 ms |
+    | int, 10,000 values | 22 ms | 43 ms |
+    | date, 1,500 values | 23 ms | 240 ms |
+
+    Sorting wins by far on numbers with many distinct values and loses a little on numbers
+    with few. It also releases the GIL, so ``base_profile`` can run it in threads; the hash
+    table cannot. Dates, categories and text keep the hash table.
     """
+    if ptypes.is_float_dtype(series.dtype) or ptypes.is_integer_dtype(series.dtype):
+        if isinstance(series.dtype, np.dtype):
+            return _sorted_counts(series.to_numpy())
+        # Nullable dtypes (Int64, Float64): numpy cannot hold their missing values. Kept in
+        # their own numpy type: float64 would merge integers above 2**53.
+        return _sorted_counts(series.dropna().to_numpy(dtype=series.dtype.numpy_dtype))
     # sort=False: ordering millions of distinct values by count is slower than counting them
     # (5.8 s against 1.6 s on 7.3 M phone numbers).
     # Filtered as a numpy array: boolean indexing of a Series with millions of text labels
@@ -170,6 +176,24 @@ def distinct_and_repeated(series: pd.Series) -> tuple[int, int]:
     # A category column also lists the categories that never appear.
     counts = counts[counts > 0]
     return int(counts.size), int(counts[counts > 1].sum())
+
+
+def _sorted_counts(values: np.ndarray) -> tuple[int, int]:
+    """``distinct_and_repeated`` of a numpy array of numbers, by sorting it.
+
+    NaN is missing and left out. Equal neighbours in the sorted array are copies of one value.
+    """
+    if values.dtype.kind == "f":
+        values = values[~np.isnan(values)]
+    if values.size == 0:
+        return 0, 0
+    ordered = np.sort(values)
+    starts_value = np.empty(ordered.size, dtype=bool)
+    starts_value[0] = True
+    np.not_equal(ordered[1:], ordered[:-1], out=starts_value[1:])
+    starts = np.flatnonzero(starts_value)
+    counts = np.diff(starts, append=ordered.size)
+    return int(starts.size), int(counts[counts > 1].sum())
 
 
 def _count_duplicate_rows(df: pd.DataFrame) -> int:
@@ -222,27 +246,112 @@ def correlation_matrix(
 
     Constant columns are left out (their correlation is undefined). If more than
     ``max_columns`` remain, the ones with the fewest missing values are kept, so the matrix
-    stays readable and is computed over as many rows as possible.
+    stays readable and is computed over as many rows as possible. Only the kept columns are
+    converted to a matrix.
 
-    Pearson uses every row. Spearman ranks the values, which is slow on large data, so it uses
-    ``sample(df, sample_rows)`` (R-P3).
+    Each pair is computed over the rows where both columns have a value, as
+    ``DataFrame.corr`` does. Pearson uses every row. Spearman ranks the values, which is slow
+    on large data, so it uses ``sample(df, sample_rows)`` (R-P3). Each column is ranked once,
+    over all its values, not again for each pair over the rows the pair shares: when values
+    are missing this differs slightly from ``DataFrame.corr(method="spearman")`` (6e-6 on
+    3 M rows with 10% missing at random), and it is 9x faster.
     """
-    numeric = df.select_dtypes("number") if columns is None else df[list(columns)]
-    # As missing: a single inf makes std() NaN, and the column would be left out.
-    numeric = numeric.astype("float64")
-    numeric = numeric.where(np.isfinite(numeric.to_numpy()))
-    # std > 0 leaves out constant and empty columns; much cheaper than ``nunique() > 1`` (R-P1).
-    numeric = numeric.loc[:, (numeric.std() > 0).to_numpy()]
-    n_numeric = numeric.shape[1]
+    names = list(df.select_dtypes("number").columns if columns is None else columns)
+    # Usually every candidate fits in the matrix: it is filled while checking the columns, so
+    # each one is converted once. With more candidates than ``max_columns`` only their counts
+    # are kept, and the chosen ones are converted again: one column at a time in memory
+    # instead of all of them.
+    fill = len(names) <= max_columns
+    full = np.empty((len(df), len(names)), dtype=np.float64, order="F") if fill else None
+    kept: list[int] = []
+    missing: list[int] = []
+    for i, name in enumerate(names):
+        values = _finite(df[name])
+        present = ~np.isnan(values)
+        count = int(np.count_nonzero(present))
+        # A spread (min < max) leaves out constant and empty columns: their correlation is
+        # undefined. Cheaper than ``std() > 0`` (13 ms against 30 ms on 3 M values) and than
+        # ``nunique() > 1``.
+        if count > 1 and (finite := values[present]).min() < finite.max():
+            kept.append(i)
+            missing.append(len(values) - count)
+            if full is not None:
+                full[:, i] = values
+    n_numeric = len(kept)
     if n_numeric < 2:
         return CorrelationResult(pd.DataFrame(), n_numeric, len(df))
     if n_numeric > max_columns:
-        # sort_values is stable, so ties keep the original column order.
-        keep = numeric.isna().sum().sort_values(kind="stable").index[:max_columns]
-        numeric = numeric[[c for c in numeric.columns if c in keep]]
+        # Stable sort, so ties keep the original column order.
+        best = set(np.argsort(missing, kind="stable")[:max_columns].tolist())
+        kept = [i for j, i in enumerate(kept) if j in best]
+    labels = [names[i] for i in kept]
+    rows = None if method == "pearson" else _sample_rows(len(df), sample_rows)
+    if full is not None:
+        # Selecting columns copies the matrix: skip it when every column is kept.
+        matrix = full if len(kept) == len(names) else full[:, kept]
+        if rows is not None:
+            matrix = matrix[rows]
+    else:
+        data = df[labels] if rows is None else df[labels].iloc[rows]
+        matrix = np.column_stack([_finite(data[name]) for name in labels])
     if method == "spearman":
-        numeric = sample(numeric, sample_rows)
-    return CorrelationResult(numeric.corr(method=method), n_numeric, len(numeric))
+        # Ranks of each column; missing values stay NaN.
+        # A writable copy: ``_pairwise_pearson`` works in place, and pandas hands out
+        # read-only views under copy-on-write.
+        matrix = pd.DataFrame(matrix).rank().to_numpy(copy=True)
+    result = pd.DataFrame(_pairwise_pearson(matrix), index=labels, columns=labels)
+    return CorrelationResult(result, n_numeric, len(matrix))
+
+
+def _sample_rows(length: int, n: int) -> np.ndarray | slice:
+    """Positions of the rows of ``sampling.sample`` with ``n`` rows, or all of them."""
+    return slice(None) if length <= n else positions(length, n)
+
+
+def _finite(series: pd.Series) -> np.ndarray:
+    """Values of a numeric column as ``float64``, with missing and infinite values as NaN."""
+    values = series.to_numpy(dtype="float64", na_value=np.nan, copy=True)
+    # As missing: a single inf makes std() NaN, and the column would be left out.
+    values[np.isinf(values)] = np.nan
+    return values
+
+
+def _pairwise_pearson(x: np.ndarray) -> np.ndarray:
+    """Pearson correlation of every pair of columns of ``x``, over the rows where both have a
+    value (not NaN). NaN where a pair has fewer than two such rows or no spread. ``x`` is
+    overwritten.
+
+    Four matrix products give, for every pair at once, the count, sums and sums of squares of
+    the rows they share. Columns are centred first: the sums of large values (dates as numbers,
+    amounts in millions) would otherwise cancel out and lose precision (pandas loses it:
+    2.5e-8 off on values around 1e12). Without missing values one product is enough.
+    """
+    present = ~np.isnan(x)
+    x -= np.nanmean(x, axis=0)
+    if present.all():
+        products = x.T @ x
+        count = np.full(products.shape, float(len(x)))
+        var = np.diag(products)[:, None] * np.ones((1, x.shape[1]))
+        cov = products
+    else:
+        x[~present] = 0.0
+        weights = present.astype(np.float64)
+        count = weights.T @ weights
+        sums = x.T @ weights  # [i, j]: sum of column i over the rows where j has a value
+        products = x.T @ x
+        np.square(x, out=x)
+        squares = x.T @ weights
+        with np.errstate(divide="ignore", invalid="ignore"):
+            cov = products - sums * sums.T / count
+            var = squares - sums * sums / count
+    with np.errstate(divide="ignore", invalid="ignore"):
+        corr = cov / np.sqrt(var * var.T)
+    corr[(count < 2) | ~(var > 0) | ~(var.T > 0)] = np.nan
+    # Rounding can leave values just past 1; the diagonal is exactly 1 where defined.
+    corr = np.clip(corr, -1.0, 1.0)
+    diagonal = np.diag(corr).copy()
+    np.fill_diagonal(corr, np.where(np.isnan(diagonal), np.nan, 1.0))
+    return corr
 
 
 def top_correlated_pairs(matrix: pd.DataFrame, n: int | None = None) -> pd.DataFrame:
@@ -252,25 +361,28 @@ def top_correlated_pairs(matrix: pd.DataFrame, n: int | None = None) -> pd.DataF
     """
     if matrix.empty:
         return pd.DataFrame({"column_a": [], "column_b": [], "correlation": []})
-    columns = list(matrix.columns)
-    values = matrix.to_numpy()
-    rows = [
-        (a, b, values[i, j])
-        for i, a in enumerate(columns)
-        for j, b in enumerate(columns)
-        if j > i and not np.isnan(values[i, j])
-    ]
-    pairs = pd.DataFrame(rows, columns=["column_a", "column_b", "correlation"])
-    order = pairs["correlation"].abs().sort_values(ascending=False, kind="stable").index
-    pairs = pairs.loc[order]
-    return (pairs if n is None else pairs.head(n)).reset_index(drop=True)
+    columns = np.asarray(matrix.columns, dtype=object)
+    rows, cols = np.triu_indices(len(columns), k=1)
+    values = matrix.to_numpy()[rows, cols]
+    defined = ~np.isnan(values)
+    rows, cols, values = rows[defined], cols[defined], values[defined]
+    # Stable: equal values keep the order of the matrix.
+    order = np.argsort(-np.abs(values), kind="stable")
+    if n is not None:
+        order = order[:n]
+    return pd.DataFrame(
+        {
+            "column_a": columns[rows[order]],
+            "column_b": columns[cols[order]],
+            "correlation": values[order],
+        }
+    )
 
 
 # Issues
 
 
 def detect_issues(
-    df: pd.DataFrame,
     base: BaseProfile,
     schema: Schema,
     pairs: pd.DataFrame,
@@ -281,9 +393,8 @@ def detect_issues(
     """Problems worth pointing out to the user, from results already computed (R-P6).
 
     Args:
-        df: The dataset, only used to look at the dtype of the columns.
-        base: Output of ``base_profile(df)``.
-        schema: Semantic types of ``df``. Identifiers are flagged as possible ids.
+        base: Output of ``base_profile``. Its ``pandas_dtype`` tells integer columns apart.
+        schema: Semantic types of the dataset. Identifiers are flagged as possible ids.
         pairs: Output of ``top_correlated_pairs`` with every pair (``n=None``), so no pair
             above ``high_correlation`` is missed.
     """
@@ -299,7 +410,9 @@ def detect_issues(
             )
         if row.unique == 1:
             issues.append(Issue(IssueKind.CONSTANT, (name,), "Has a single value"))
-        elif _is_possible_id(df[name], schema.type_of(name), int(row.unique), n_values):
+        elif _is_possible_id(
+            str(row.pandas_dtype), schema.type_of(name), int(row.unique), n_values
+        ):
             share = "All" if row.unique == n_values else f"{row.unique_pct:.0f}% of the"
             issues.append(
                 Issue(IssueKind.POSSIBLE_ID, (name,), f"{share} values are distinct (possible id)")
@@ -322,7 +435,7 @@ def detect_issues(
     return issues
 
 
-def _is_possible_id(series: pd.Series, kind: SemanticType, unique: int, n_values: int) -> bool:
+def _is_possible_id(dtype: str, kind: SemanticType, unique: int, n_values: int) -> bool:
     """Identifiers of the schema, and integer numbers that (almost) never repeat.
 
     A few repeats are allowed (``schema.IDENTIFIER_MIN_DISTINCT``): in a dirty file, duplicated
@@ -333,7 +446,7 @@ def _is_possible_id(series: pd.Series, kind: SemanticType, unique: int, n_values
         return True
     return (
         kind is SemanticType.NUMERIC
-        and ptypes.is_integer_dtype(series)
+        and ptypes.is_integer_dtype(pd.api.types.pandas_dtype(dtype))
         and n_values >= IDENTIFIER_MIN_ROWS
         and mostly_distinct(unique, n_values)
     )
