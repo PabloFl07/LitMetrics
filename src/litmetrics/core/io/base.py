@@ -43,6 +43,8 @@ class LoadedDataset:
         name: Name of the original file.
         separator: Column separator used to read it.
         encoding: Text encoding used to read it.
+        has_header: Whether the first row of the file held the column names.
+        decimal: Decimal mark of the numbers in the file.
         unparsed: For each date or numeric column stored as text in the file, how many of its
             values could not be read as dates or numbers (they became missing when the column
             was converted).
@@ -52,6 +54,8 @@ class LoadedDataset:
     name: str
     separator: str
     encoding: str
+    has_header: bool = True
+    decimal: str = "."
     unparsed: Mapping[str, int] = field(default_factory=dict)
 
     @property
