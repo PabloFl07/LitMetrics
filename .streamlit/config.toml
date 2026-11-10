@@ -1,12 +1,13 @@
 [server]
-maxUploadSize = 500
+maxUploadSize = 700
 
 # The theme lives in .streamlit/themes/theme_<n>.toml, one file per style variant, and each
 # variant has its stylesheet in src/litmetrics/ui/ (variant 0: styles.css, n: styles_<n>.css).
 # Keep every theme key out of this file: a key set here overrides the same key of every
 # variant. Pick a variant with ``uv run litmetrics --style <n>``; without it, variant 0 is used.
-# The path is relative to the directory where the app is started (the project root).
-# See docs/styling.md.
+# ``litmetrics`` always passes the absolute path of the theme on the command line, which wins
+# over this file. The relative path below is only used by a plain ``streamlit run`` started from
+# the project root. See docs/styling.md.
 
 [theme]
 base = ".streamlit/themes/theme_0.toml"

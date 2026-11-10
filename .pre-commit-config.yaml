@@ -2,16 +2,16 @@ repos:
   - repo: https://github.com/pre-commit/pre-commit-hooks
     rev: v6.0.0
     hooks:
-      - id: check-added-large-files   # bloquea archivos grandes (datasets, modelos)
+      - id: check-added-large-files   # blocks large files (datasets, models)
         args: ["--maxkb=500"]
-      - id: detect-private-key        # bloquea claves privadas
-      - id: check-yaml                # YAML bien formado
-      - id: check-toml                # pyproject.toml bien formado
-      - id: end-of-file-fixer         # salto de línea al final del archivo
-      - id: trailing-whitespace       # quita espacios sobrantes al final de línea
+      - id: detect-private-key        # blocks private keys
+      - id: check-yaml                # well-formed YAML
+      - id: check-toml                # well-formed pyproject.toml
+      - id: end-of-file-fixer         # newline at the end of every file
+      - id: trailing-whitespace       # removes trailing spaces
 
   - repo: https://github.com/astral-sh/ruff-pre-commit
-    rev: v0.16.10                       # se actualiza con autoupdate (paso 3)
+    rev: v0.17.2                      # same version as ruff in uv.lock; update both together
     hooks:
       - id: ruff-check
         args: ["--fix"]

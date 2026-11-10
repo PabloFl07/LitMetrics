@@ -2,6 +2,7 @@
 
 import os
 import sys
+from collections.abc import MutableMapping
 from pathlib import Path
 
 # Project root: theme files are found from here (``StyleConfig.themes_dir``).
@@ -15,32 +16,49 @@ def main() -> None:
     the ``LITMETRICS_STYLE`` environment variable is used, and then variant 0. Other
     command-line arguments are passed on to ``streamlit run``
     (e.g. ``uv run litmetrics --style 2 --server.port 8502``).
+
+    The theme is always passed as an absolute ``--theme.base``: Streamlit only reads
+    ``.streamlit/config.toml`` from the directory the app starts in, so without it the app
+    started from any other directory has no theme and every chart fails.
     """
     # Imported here: this module runs on any ``import litmetrics...``, and ``core`` must stay
     # importable without loading Streamlit.
     from streamlit.web import cli
 
-    from litmetrics.config import StyleConfig
-
-    args = sys.argv[1:]
-    variant, args = _pop_style(args)
-    variant = variant or os.environ.get(StyleConfig.env_var)
-    if variant is not None:
-        theme = _ROOT / StyleConfig.themes_dir / f"theme_{variant}.toml"
-        if not variant.isdigit() or not theme.is_file():
-            sys.exit(f"Unknown style {variant!r}: there is no {theme}.")
-        # The app process reads the variable to load the matching stylesheet.
-        os.environ[StyleConfig.env_var] = variant
-        # A command-line option wins over the base set in .streamlit/config.toml.
-        args = [f"--theme.base={theme}", *args]
-
+    args = streamlit_args(sys.argv[1:], os.environ)
     app = Path(__file__).with_name("app.py")
     sys.argv = ["streamlit", "run", str(app), *args]
     sys.exit(cli.main())
 
 
+def streamlit_args(argv: list[str], environ: MutableMapping[str, str]) -> list[str]:
+    """Arguments for ``streamlit run``: ``argv`` without ``--style``, plus the theme.
+
+    Sets ``LITMETRICS_STYLE`` in ``environ`` to the chosen variant: the app process reads it to
+    load the stylesheet that goes with the theme.
+
+    Raises:
+        SystemExit: The variant is not a number or has no theme file.
+    """
+    from litmetrics.config import StyleConfig
+
+    value, rest = _pop_style(argv)
+    if value == "":
+        sys.exit("--style needs a variant number, e.g. --style 2.")
+    variant = value or environ.get(StyleConfig.env_var) or str(StyleConfig.default_variant)
+    theme = _ROOT / StyleConfig.themes_dir / f"theme_{variant}.toml"
+    if not variant.isdigit() or not theme.is_file():
+        sys.exit(f"Unknown style {variant!r}: there is no {theme}.")
+    environ[StyleConfig.env_var] = variant
+    # A command-line option wins over the base set in .streamlit/config.toml.
+    return [f"--theme.base={theme}", *rest]
+
+
 def _pop_style(args: list[str]) -> tuple[str | None, list[str]]:
-    """Value of ``--style N`` / ``--style=N`` in ``args``, and ``args`` without it."""
+    """Value of ``--style N`` / ``--style=N`` in ``args``, and ``args`` without it.
+
+    ``--style`` without a value gives ``""``; no ``--style`` gives None.
+    """
     rest: list[str] = []
     value: str | None = None
     it = iter(args)
