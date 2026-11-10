@@ -13,6 +13,7 @@ derived here from theme colors, never written as literals. Changing ``primaryCol
 theme file changes all of them.
 """
 
+import re
 from collections.abc import Callable
 from dataclasses import dataclass, fields
 from typing import Any, Literal
@@ -26,6 +27,9 @@ type Mode = Literal["light", "dark"]
 type Lookup = Callable[[str], Any]
 
 MODES: tuple[Mode, ...] = ("light", "dark")
+
+# The only color format the derived tones (``charts.mix``, ``charts.with_alpha``) can read.
+_HEX_COLOR = re.compile(r"#[0-9a-fA-F]{6}")
 
 # Ends of the mixes that darken (light mode) or lighten (dark mode) a theme color. They are not
 # theme colors: they only set the direction of the mix.
@@ -95,7 +99,11 @@ def palette(mode: Mode, lookup: Lookup = st.get_option) -> Palette:
             the theme file set as ``theme.base``; tests pass a reader of a theme file.
 
     Raises:
-        ValueError: The theme does not set one of the colors, in that mode or in ``[theme]``.
+        ValueError: The theme does not set one of the colors, in that mode or in ``[theme]``,
+            or writes one in a format other than ``#rrggbb``.
+
+    Not cached: it takes 0.06 ms, and a cache would keep the old colors when the theme file is
+    edited while the app runs.
     """
     values: dict[str, Any] = {}
     for field in fields(Palette):
@@ -107,6 +115,12 @@ def palette(mode: Mode, lookup: Lookup = st.get_option) -> Palette:
             raise ValueError(
                 f"The theme does not set {name} for {mode} mode. Add it to the theme file "
                 "(docs/styling.md lists the required options)."
+            )
+        colors = value if isinstance(value, list) else [value]
+        if bad := [c for c in colors if not _HEX_COLOR.fullmatch(str(c))]:
+            raise ValueError(
+                f"The theme sets {name} for {mode} mode as {bad[0]!r}. Write theme colors as "
+                "#rrggbb (docs/styling.md)."
             )
         values[field.name] = tuple(value) if isinstance(value, list) else value
     return Palette(**values)
