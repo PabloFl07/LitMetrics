@@ -1,6 +1,6 @@
 """Column table of the Profile page: what each column holds, described for its semantic type.
 
-Two levels, as in the column table proof of concept (drafts/column_table_poc):
+Two levels:
 - ``column_overview``: one short row per column (type, missing, distinct values and the bars
   of a small chart);
 - per-type tables (``numeric_stats``, ``categorical_stats``, ``datetime_stats``,
@@ -487,13 +487,14 @@ def datetime_bars(series: pd.Series, bins: int, sample_rows: int) -> Bars:
     values = datetime_values(series)
     if values.empty:
         return Bars()
+    # Integers in the unit the column is stored in (s, ms, us or ns), never converted to ns:
+    # placeholder dates such as 9999-12-31 or 0001-01-01 only fit in the coarser units.
+    unit = values.dt.unit
+    ticks = values.astype("int64")
     # Exact bounds, so the chart spans the whole column; the heights come from the sample.
-    # pandas may store dates in s/ms/us: fix the unit so the integers are nanoseconds.
-    low = float(values.min().as_unit("ns").value)
-    high = float(values.max().as_unit("ns").value)
-    ns = sample(values, sample_rows).dt.as_unit("ns").astype("int64")
-    counts, edges = histogram(ns.to_numpy(), bins, low, high)
-    dates = [pd.Timestamp(int(e)) for e in edges]
+    low, high = float(ticks.min()), float(ticks.max())
+    counts, edges = histogram(sample(ticks, sample_rows).to_numpy(), bins, low, high)
+    dates = [pd.Timestamp(np.datetime64(round(e), unit)) for e in edges]
     labels = [f"{a:%Y-%m-%d} to {b:%Y-%m-%d}" for a, b in pairwise(dates)]
     return Bars(tuple(counts), tuple(labels))
 
