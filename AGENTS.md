@@ -45,8 +45,9 @@ src/litmetrics/
     theme.py        Reads the theme (both modes): CSS variables --lm-* and chart colors
     style.py        Injects the variant stylesheet, page header and cards (``style.card``)
     tables.py       Rows prepared for ``st.dataframe`` (``tables.for_display`` for previews)
-    styles_base.css Rules shared by style variants 0-3, loaded before the variant's own
-    styles.css      CSS of style variant 0; styles_<n>.css of variant n (docs/styling.md)
+    styles/         Stylesheets of the style variants (docs/styling.md):
+      styles_base.css Rules shared by style variants 0-3, loaded before the variant's own
+      styles.css      CSS of style variant 0; styles_<n>.css of variant n
     pages/          One module per page
 tests/core/       pytest, mirrors src/litmetrics/core
 tests/ui/         AppTest smoke tests of the pages and tests of ui/charts.py
@@ -85,10 +86,10 @@ drafts/           Design notes and plans (Spanish). Intent, not truth: the code 
 - Thresholds and limits go in `config.py`, not as literals in pages.
 - Colors, fonts and radii go in the theme file of each style variant
   (`.streamlit/themes/theme_<n>.toml`); `.streamlit/config.toml` only sets `theme.base`. The
-  stylesheets (`ui/styles.css`, `ui/styles_<n>.css`) only add what the theme cannot set, use
-  colors only through `var(--lm-*)` (from `ui/theme.py`), target our elements by `key`
-  (`.st-key-<key>`) and Streamlit ones by `data-testid` / ARIA, never by `.st-emotion-cache-*`
-  classes. Every page starts with `style.page_header(title, subtitle)`. See docs/styling.md.
+  stylesheets (`ui/styles/styles.css`, `ui/styles/styles_<n>.css`) only add what the theme
+  cannot set, use colors only through `var(--lm-*)` (from `ui/theme.py`), target our elements
+  by `key` (`.st-key-<key>`) and Streamlit ones by `data-testid` / ARIA, never by
+  `.st-emotion-cache-*` classes. Every page starts with `style.page_header(title, subtitle)`. See docs/styling.md.
 - Charts are drawn with `echarts.show(option, key=..., height=...)`; builders take their colors
   as `theme.chart_colors()`, never hex literals.
 - Charts use [streamlit-echarts](https://github.com/andfanilo/streamlit-echarts) 0.7: any
