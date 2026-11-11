@@ -8,6 +8,7 @@ import codecs
 import csv
 import io
 import re
+from collections.abc import Iterable
 from dataclasses import dataclass
 from itertools import islice, zip_longest
 
@@ -153,7 +154,7 @@ def detect_header(rows: list[list[str]]) -> bool:
     return not first_has_number
 
 
-def _column_is_number(values) -> bool | None:
+def _column_is_number(values: Iterable[str]) -> bool | None:
     """True if most non-empty values are numbers, False if most are text, None if mixed or empty."""
     values = [v for v in values if v.strip()]
     if not values:
@@ -167,4 +168,5 @@ def _column_is_number(values) -> bool | None:
 
 
 def _is_number(value: str) -> bool:
+    """Whether ``value`` is written as a number (``_NUMBER``), ignoring surrounding spaces."""
     return _NUMBER.fullmatch(value.strip()) is not None

@@ -63,7 +63,7 @@ _EXAMPLE_CHUNK = 1_000
 NUMERIC_STATS_COLUMNS = [
     "column", "count", "mean", "std", "cv", "min", "p5", "q1", "median", "q3", "p95", "max",
     "iqr", "whisker_low", "whisker_high", "outliers", "outliers_pct", "zeros", "negatives",
-    "infinite", "skew", "kurtosis", "shape",
+    "infinite", "unparsed", "skew", "kurtosis", "shape",
 ]  # fmt: skip
 CATEGORICAL_STATS_COLUMNS = [
     "column", "unique", "mode", "mode_pct", "top", "rare", "variants",
@@ -75,6 +75,7 @@ TEXT_STATS_COLUMNS = [
     "column", "semantic_type", "len_min", "len_mean", "len_max", "blank", "unique_pct",
     "repeated", "example",
 ]  # fmt: skip
+OVERVIEW_COLUMNS = ["column", "semantic_type", "missing_pct", "unique_pct", "distribution"]
 
 
 @dataclass(frozen=True)
@@ -136,7 +137,9 @@ class ColumnDetail:
 # Shared helpers
 
 
-def histogram(values: np.ndarray, bins: int, low: float, high: float) -> tuple[list[int], list]:
+def histogram(
+    values: np.ndarray, bins: int, low: float, high: float
+) -> tuple[list[int], list[float]]:
     """Counts and bin edges of ``values`` between ``low`` and ``high`` (values outside ignored)."""
     if values.size == 0:
         return [], []
@@ -192,7 +195,12 @@ def value_counts(series: pd.Series) -> pd.Series:
 
 
 def numeric_stats(
-    df: pd.DataFrame, columns: Sequence[str], sample_rows: int, workers: int = 1
+    df: pd.DataFrame,
+    columns: Sequence[str],
+    sample_rows: int,
+    workers: int = 1,
+    *,
+    unparsed: Mapping[str, int] | None = None,
 ) -> pd.DataFrame:
     """Position, spread, outliers and shape of every numeric column in ``columns``.
 
@@ -207,9 +215,15 @@ def numeric_stats(
 
     Args:
         workers: Threads, one column each (``parallel.map_columns``). Same result.
+        unparsed: Values of each column that were not numbers when the file was loaded
+            (``LoadedDataset.unparsed``), now missing. Columns not listed count 0.
     """
-    rows = map_columns(lambda name: _numeric_row(name, df[name], sample_rows), columns, workers)
-    return pd.DataFrame(rows, columns=NUMERIC_STATS_COLUMNS)
+    unparsed = unparsed or {}
+
+    def row(name: str) -> dict[str, Any]:
+        return _numeric_row(name, df[name], sample_rows, int(unparsed.get(name, 0)))
+
+    return pd.DataFrame(map_columns(row, columns, workers), columns=NUMERIC_STATS_COLUMNS)
 
 
 def numeric_sample(series: pd.Series, n: int) -> np.ndarray:
@@ -221,7 +235,7 @@ def numeric_sample(series: pd.Series, n: int) -> np.ndarray:
     return sample_array(finite_values(series), n)
 
 
-def _numeric_row(name: str, series: pd.Series, sample_rows: int) -> dict[str, Any]:
+def _numeric_row(name: str, series: pd.Series, sample_rows: int, unparsed: int) -> dict[str, Any]:
     """Row of ``numeric_stats`` for one column. Same definitions as pandas' ``describe``:
     ``std`` with one degree of freedom, linear interpolation between quantiles, and pandas'
     bias-corrected skewness and kurtosis.
@@ -272,17 +286,11 @@ def _numeric_row(name: str, series: pd.Series, sample_rows: int) -> dict[str, An
         "zeros": int(np.count_nonzero(values == 0)),
         "negatives": int(np.count_nonzero(values < 0)),
         "infinite": int(np.count_nonzero(~finite_mask & ~np.isnan(raw))),
+        "unparsed": unparsed,
         "skew": skew,
         "kurtosis": kurtosis,
         "shape": shape_label(skew),
     }
-
-
-def with_unparsed(table: pd.DataFrame, unparsed: Mapping[str, int]) -> pd.DataFrame:
-    """``table`` (a per-type table) plus ``unparsed``: values of each column that were not
-    numbers or dates when the file was loaded (``LoadedDataset.unparsed``), now missing.
-    """
-    return table.assign(unparsed=[int(unparsed.get(name, 0)) for name in table["column"]])
 
 
 def shape_label(skew: float) -> str:
@@ -325,7 +333,9 @@ def numeric_bars(
     return Bars(tuple(heights), tuple(labels), edges=tuple(edges))
 
 
-def outlier_values(series: pd.Series, stats: pd.Series, limit: int, sample_rows: int) -> list:
+def outlier_values(
+    series: pd.Series, stats: pd.Series, limit: int, sample_rows: int
+) -> list[float]:
     """Up to ``limit`` outliers of the sample, the most extreme first (R-P2, R-V2)."""
     values = numeric_sample(series, sample_rows)
     outside = values[(values < stats["whisker_low"]) | (values > stats["whisker_high"])]
@@ -504,26 +514,28 @@ def text_stats(
     Lengths come from ``sample_values`` of each column; blank values are exact, and distinct and
     repeated values come from ``base`` (R-P1).
     """
-    table = base.columns.set_index("column")
-    rows = []
-    for name in columns:
-        series = df[name]
-        lengths = text_lengths(sample_values(series, sample_rows))
-        has_values = not lengths.empty
-        rows.append(
-            {
-                "column": name,
-                "semantic_type": schema.type_of(name).value,
-                "len_min": int(lengths.min()) if has_values else None,
-                "len_mean": float(lengths.mean()) if has_values else float("nan"),
-                "len_max": int(lengths.max()) if has_values else None,
-                "blank": _count_blank(series),
-                "unique_pct": float(table.loc[name, "unique_pct"]),
-                "repeated": int(table.loc[name, "repeated"]),
-                "example": _first_non_blank(series),
-            }
-        )
+    rows = [_text_row(df[name], schema.type_of(name), base, sample_rows) for name in columns]
     return pd.DataFrame(rows, columns=TEXT_STATS_COLUMNS)
+
+
+def _text_row(
+    series: pd.Series, kind: SemanticType, base: BaseProfile, sample_rows: int
+) -> dict[str, Any]:
+    """Row of ``text_stats`` for one column of semantic type ``kind``."""
+    name = series.name
+    lengths = text_lengths(sample_values(series, sample_rows))
+    has_values = not lengths.empty
+    return {
+        "column": name,
+        "semantic_type": kind.value,
+        "len_min": int(lengths.min()) if has_values else None,
+        "len_mean": float(lengths.mean()) if has_values else float("nan"),
+        "len_max": int(lengths.max()) if has_values else None,
+        "blank": _count_blank(series),
+        "unique_pct": float(base.by_column.loc[name, "unique_pct"]),
+        "repeated": int(base.by_column.loc[name, "repeated"]),
+        "example": _first_non_blank(series),
+    }
 
 
 def _count_blank(series: pd.Series) -> int:
@@ -554,6 +566,7 @@ def text_bars(series: pd.Series, bins: int, sample_rows: int) -> Bars:
 
 
 def _length_bars(lengths: pd.Series, bins: int) -> Bars:
+    """Histogram of ``lengths`` (output of ``text_lengths``). No bars if there are none."""
     if lengths.empty:
         return Bars()
     counts, edges = histogram(lengths.to_numpy(), bins, float(lengths.min()), float(lengths.max()))
@@ -617,6 +630,58 @@ def column_detail(
     )
 
 
+def inspect_column(
+    df: pd.DataFrame,
+    name: str,
+    kind: SemanticType,
+    base: BaseProfile,
+    *,
+    sample_rows: int,
+    unparsed: Mapping[str, int],
+    now: pd.Timestamp | None,
+    outlier_limit: int,
+    n_examples: int,
+) -> tuple[pd.DataFrame, ColumnDetail]:
+    """Measures and chart data of column ``name``, for the column inspector.
+
+    Only that column is computed: the row is the same as in the table of its type, without
+    describing every column of that type.
+
+    Args:
+        base: Output of ``profile.base_profile(df)``.
+        unparsed: ``LoadedDataset.unparsed``, for numeric and date columns.
+        now: Date columns only: see ``datetime_stats``.
+        outlier_limit: Most outliers returned for a numeric column, to keep the chart light.
+        n_examples: Example values returned for text and identifier columns.
+
+    Returns:
+        The one-row table of the type of the column (a row of ``numeric_stats``,
+        ``categorical_stats``, ``datetime_stats`` or ``text_stats``) and its chart data.
+    """
+    stats: pd.Series | None = None
+    if kind in NUMERIC_TYPES:
+        table = numeric_stats(df, (name,), sample_rows, unparsed=unparsed)
+        stats = table.iloc[0]
+    elif kind in CATEGORICAL_TYPES:
+        table = categorical_stats(df, (name,))
+    elif kind in DATE_TYPES:
+        table = datetime_stats(df, (name,), unparsed, now)
+    else:
+        row = _text_row(df[name], kind, base, sample_rows)
+        table = pd.DataFrame([row], columns=TEXT_STATS_COLUMNS)
+    detail = column_detail(
+        df,
+        name,
+        kind,
+        unique=int(base.by_column.loc[name, "unique"]),
+        stats=stats,
+        sample_rows=sample_rows,
+        outlier_limit=outlier_limit,
+        n_examples=n_examples,
+    )
+    return table, detail
+
+
 # Overview
 
 
@@ -643,11 +708,12 @@ def column_overview(
         numeric: Output of ``numeric_stats`` for the numeric columns.
         workers: Threads, one column each. Same result.
     """
-    table = base.columns.set_index("column")
     numeric = numeric.set_index("column")
+    # Read before the threads start: they all share it.
+    by_column = base.by_column
 
     def row(name: str, kind: SemanticType) -> dict[str, Any]:
-        stats = table.loc[name]
+        stats = by_column.loc[name]
         has_values = int(stats["missing"]) < base.n_rows
         bars = (
             _overview_bars(df[name], kind, int(stats["unique"]), numeric, sample_rows)
@@ -663,9 +729,7 @@ def column_overview(
         }
 
     rows = map_columns(lambda c: row(c.name, c.semantic_type), schema.columns, workers)
-    return pd.DataFrame(
-        rows, columns=["column", "semantic_type", "missing_pct", "unique_pct", "distribution"]
-    )
+    return pd.DataFrame(rows, columns=OVERVIEW_COLUMNS)
 
 
 def _overview_bars(

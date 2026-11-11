@@ -33,7 +33,7 @@ from litmetrics.core import columns, profile
 from litmetrics.core.io.base import LoadedDataset, Source
 from litmetrics.core.io.csv_loader import CsvLoader
 from litmetrics.core.io.sniffing import CsvOptions
-from litmetrics.core.schema import ColumnSchema, Schema, SemanticType, prepare_dataset
+from litmetrics.core.schema import Schema, SemanticType, prepare_dataset
 
 _PROFILE_MAX = ProfileConfig.cache_max_datasets
 _WORKERS = ProfileConfig.workers
@@ -104,15 +104,21 @@ def correlation(
 
 @st.cache_data(max_entries=_PROFILE_MAX, show_spinner="Describing numeric columns…", show_time=True)
 def numeric_stats(
-    dataset_id: str, _df: pd.DataFrame, names: tuple[str, ...], sample_rows: int
+    dataset_id: str,
+    _df: pd.DataFrame,
+    names: tuple[str, ...],
+    sample_rows: int,
+    _unparsed: Mapping[str, int],
 ) -> pd.DataFrame:
-    return columns.numeric_stats(_df, names, sample_rows, _WORKERS)
+    """Numeric table. ``_unparsed`` is ``LoadedDataset.unparsed`` of the same dataset."""
+    return columns.numeric_stats(_df, names, sample_rows, _WORKERS, unparsed=_unparsed)
 
 
 @st.cache_data(
     max_entries=_PROFILE_MAX, show_spinner="Describing categorical columns…", show_time=True
 )
 def categorical_stats(dataset_id: str, _df: pd.DataFrame, names: tuple[str, ...]) -> pd.DataFrame:
+    """Categorical and boolean table."""
     return columns.categorical_stats(_df, names)
 
 
@@ -136,17 +142,23 @@ def text_stats(
     schema: Schema,
     sample_rows: int,
 ) -> pd.DataFrame:
+    """Text and identifier table. Reuses the cached base pass."""
     base = base_profile(dataset_id, _df)
     return columns.text_stats(_df, names, schema, base, sample_rows)
 
 
 @st.cache_data(max_entries=_PROFILE_MAX, show_spinner="Describing columns…", show_time=True)
 def column_overview(
-    dataset_id: str, _df: pd.DataFrame, schema: Schema, sample_rows: int
+    dataset_id: str,
+    _df: pd.DataFrame,
+    schema: Schema,
+    sample_rows: int,
+    _unparsed: Mapping[str, int],
 ) -> pd.DataFrame:
     """One row per column of ``schema``. Reuses the cached base pass and numeric table."""
     base = base_profile(dataset_id, _df)
-    numeric = numeric_stats(dataset_id, _df, schema.names_of(columns.NUMERIC_TYPES), sample_rows)
+    names = schema.names_of(columns.NUMERIC_TYPES)
+    numeric = numeric_stats(dataset_id, _df, names, sample_rows, _unparsed)
     return columns.column_overview(_df, schema, base, numeric, sample_rows, _WORKERS)
 
 
@@ -160,41 +172,22 @@ def inspect_column(
     _unparsed: Mapping[str, int],
     now: pd.Timestamp | None,
 ) -> tuple[pd.DataFrame, columns.ColumnDetail]:
-    """Measures and chart data of one column, for the inspector.
+    """Measures and chart data of one column, for the inspector (``columns.inspect_column``).
 
-    Only that column is computed: the row is the same as in its per-type table, without
-    computing the table of every column of its type. Small, so many columns fit in the cache.
-
-    Returns:
-        The one-row per-type table of the column (with ``unparsed`` for numbers and dates),
-        and its chart data.
+    Small, so many columns fit in the cache.
 
     Args:
         now: Date columns only (``datetime_stats``); pass None for the others, so their entry
             does not expire with the clock.
     """
-    names = (name,)
-    unique = int(base_profile(dataset_id, _df).columns.set_index("column").loc[name, "unique"])
-    stats: pd.Series | None = None
-    if kind in columns.NUMERIC_TYPES:
-        table = columns.with_unparsed(columns.numeric_stats(_df, names, sample_rows), _unparsed)
-        stats = table.iloc[0]
-    elif kind in columns.CATEGORICAL_TYPES:
-        table = columns.categorical_stats(_df, names)
-    elif kind in columns.DATE_TYPES:
-        table = columns.datetime_stats(_df, names, _unparsed, now)
-    else:
-        schema = Schema((ColumnSchema(name, str(_df[name].dtype), kind),))
-        base = base_profile(dataset_id, _df)
-        table = columns.text_stats(_df, names, schema, base, sample_rows)
-    detail = columns.column_detail(
+    return columns.inspect_column(
         _df,
         name,
         kind,
-        unique=unique,
-        stats=stats,
+        base_profile(dataset_id, _df),
         sample_rows=sample_rows,
+        unparsed=_unparsed,
+        now=now,
         outlier_limit=ProfileConfig.max_outlier_dots,
         n_examples=ProfileConfig.text_examples,
     )
-    return table, detail

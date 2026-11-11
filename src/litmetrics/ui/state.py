@@ -97,14 +97,6 @@ def set_read_error(source_id: str, message: str) -> None:
     st.session_state[_READ_ERROR] = (source_id, message)
 
 
-def clear_dataset() -> None:
-    """Forget the active dataset and everything that depends on it."""
-    _reset_dependent_state()
-    st.session_state[_DATASET] = None
-    st.session_state[_DATASET_ID] = None
-    st.session_state[_SOURCE_ID] = None
-
-
 # Dataset: reading it (used by every page)
 
 

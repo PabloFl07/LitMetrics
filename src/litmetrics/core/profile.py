@@ -15,6 +15,7 @@ Built for large datasets (rules in docs/performance.md):
 from collections.abc import Sequence
 from dataclasses import dataclass
 from enum import StrEnum
+from functools import cached_property
 from typing import Literal
 
 import numpy as np
@@ -49,6 +50,15 @@ class BaseProfile:
     missing_per_row: pd.DataFrame
     duplicate_rows: int
     memory_bytes: int
+
+    @cached_property
+    def by_column(self) -> pd.DataFrame:
+        """``columns`` indexed by column name, to read the counts of one column:
+        ``base.by_column.loc[name, "unique"]``.
+        """
+        # cached_property writes the instance __dict__ directly, so it works on a frozen
+        # dataclass, as in ``schema.Schema``.
+        return self.columns.set_index("column")
 
     @property
     def missing_cells_pct(self) -> float:
@@ -224,8 +234,8 @@ def missing_by_column(base: BaseProfile) -> pd.DataFrame:
 
 def rows_with_missing(df: pd.DataFrame, n: int) -> pd.DataFrame:
     """First ``n`` rows that have at least one missing value (R-P7)."""
-    positions = np.flatnonzero(df.isna().any(axis=1).to_numpy())[:n]
-    return df.iloc[positions]
+    incomplete = np.flatnonzero(df.isna().any(axis=1).to_numpy())[:n]
+    return df.iloc[incomplete]
 
 
 # Correlation
@@ -446,7 +456,7 @@ def _is_possible_id(dtype: str, kind: SemanticType, unique: int, n_values: int) 
         return True
     return (
         kind is SemanticType.NUMERIC
-        and ptypes.is_integer_dtype(pd.api.types.pandas_dtype(dtype))
+        and ptypes.is_integer_dtype(ptypes.pandas_dtype(dtype))
         and n_values >= IDENTIFIER_MIN_ROWS
         and mostly_distinct(unique, n_values)
     )

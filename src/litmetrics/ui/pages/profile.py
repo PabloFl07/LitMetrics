@@ -76,6 +76,7 @@ _NUMERIC_DEFAULT_GROUPS = ["Position", "Outliers"]
 # Height (px) of the header of a table, to size tables to their content. Rows have a fixed
 # height (``ProfileConfig.table_row_height``) passed to every table sized this way.
 _HEADER_PX = 36
+# Height of the small charts of the date and text column inspectors.
 _CHART_HEIGHT = "240px"
 # Height of the charts of the Missing values tab.
 _MISSING_CHART_HEIGHT = "300px"
@@ -85,7 +86,7 @@ _INSPECT_CHART_HEIGHT = "300px"
 _NUMERIC_CHART_ICONS = {"Histogram": "bar_chart", "Boxplot": "candlestick_chart"}
 
 # Label, number format and explanation of every measure of the numeric table. The table's
-# ``column_config`` and the "All measures" cards are both built from it.
+# ``column_config`` and the "All measures" cards (``_format_stat``) are both built from it.
 _NUMERIC_MEASURES: dict[str, tuple[str, str | None, str | None]] = {
     "count": ("Values", None, "Finite, non-missing values"),
     "min": ("Min", "%.4g", None),
@@ -109,7 +110,7 @@ _NUMERIC_MEASURES: dict[str, tuple[str, str | None, str | None]] = {
         "%.4g",
         "Highest value that is not an outlier (upper whisker of the boxplot)",
     ),
-    # Count and share in one column, built by ``_with_labels``.
+    # Count and share in one text column, built by ``_with_labels``.
     "outliers_label": (
         "Outliers",
         None,
@@ -132,16 +133,11 @@ _NUMERIC_MEASURES: dict[str, tuple[str, str | None, str | None]] = {
 # Measures shown as text in the table; the rest are numbers.
 _TEXT_MEASURES = {"outliers_label", "shape"}
 
-
-def _numeric_column_config() -> dict[str, Any]:
-    """``column_config`` of the numeric table, from ``_NUMERIC_MEASURES``."""
-    config: dict[str, Any] = {"column": st.column_config.TextColumn("Column", pinned=True)}
-    for key, (label, fmt, help_text) in _NUMERIC_MEASURES.items():
-        if key in _TEXT_MEASURES:
-            config[key] = st.column_config.TextColumn(label, help=help_text)
-        else:
-            config[key] = st.column_config.NumberColumn(label, format=fmt, help=help_text)
-    return config
+# Explanations shown both in a per-type table and in the inspector of one column.
+_BLANK_HELP = 'Empty or only spaces: "" or "   "'
+_REPEATED_HELP = "Rows whose value appears more than once"
+# First column of every per-type table.
+_NAME_COLUMN = "column"
 
 
 def profile_page() -> None:
@@ -180,7 +176,7 @@ def profile_page() -> None:
             _correlation()
 
 
-# COMPONENTS
+# Components
 
 
 def _skip_selector(schema: Schema) -> None:
@@ -304,8 +300,8 @@ def _columns() -> None:
     if view == "Overview":
         _overview(active)
     elif view == "Numeric":
-        table = cache.numeric_stats(dataset_id, df, names, _CFG.sample_rows)
-        _numeric_table(_with_labels(cols.with_unparsed(table, dataset.unparsed)))
+        table = cache.numeric_stats(dataset_id, df, names, _CFG.sample_rows, dataset.unparsed)
+        _numeric_table(_with_labels(table))
         _sample_note(dataset, "Percentiles, IQR, skewness and kurtosis are")
     elif view == "Categorical":
         _categorical_table(cache.categorical_stats(dataset_id, df, names))
@@ -320,7 +316,9 @@ def _columns() -> None:
 def _overview(active: _Active) -> None:
     """One short row per column. Selecting a row opens the inspector of that column."""
     dataset = active.dataset
-    table = cache.column_overview(active.dataset_id, dataset.df, active.schema, _CFG.sample_rows)
+    table = cache.column_overview(
+        active.dataset_id, dataset.df, active.schema, _CFG.sample_rows, dataset.unparsed
+    )
     counts = table["semantic_type"].value_counts()
     kinds = [kind for kind in SemanticType if kind.value in counts]
     picked = st.pills(
@@ -347,13 +345,7 @@ def _overview(active: _Active) -> None:
         ),
         height=_table_height(len(table)),
         row_height=_CFG.table_row_height,
-        column_order=[
-            "column",
-            "semantic_type",
-            "missing_pct",
-            "unique_pct",
-            "distribution",
-        ],
+        column_order=cols.OVERVIEW_COLUMNS,
         column_config={
             "column": st.column_config.TextColumn("Column", pinned=True),
             "semantic_type": st.column_config.TextColumn("Type"),
@@ -389,7 +381,7 @@ def _inspector(active: _Active, name: str) -> None:
     dataset_id, dataset = active.dataset_id, active.dataset
     df = dataset.df
     kind = active.schema.type_of(name)
-    base = cache.base_profile(dataset_id, df).columns.set_index("column").loc[name]
+    base = cache.base_profile(dataset_id, df).by_column.loc[name]
     # Keyed: styles.css gives the inspector a shadow.
     with st.container(border=True, key="inspector"):
         st.subheader(name, anchor=False)
@@ -411,7 +403,7 @@ def _inspector(active: _Active, name: str) -> None:
                 return
             _inspect_numeric(name, stats, detail)
         elif kind in cols.CATEGORICAL_TYPES:
-            _inspect_categorical(name, table.iloc[0])
+            _inspect_categorical(table.iloc[0])
             _top_values(name, detail)
         elif kind in cols.DATE_TYPES:
             _inspect_dates(name, table.iloc[0], detail)
@@ -422,6 +414,7 @@ def _inspector(active: _Active, name: str) -> None:
 
 
 def _inspect_numeric(name: str, stats: pd.Series, detail: cols.ColumnDetail) -> None:
+    """Headline measures, histogram or boxplot, and every measure in cards."""
     if stats["unparsed"]:
         st.caption(
             f":material/warning: {stats['unparsed']:,} values were not numbers in the file "
@@ -439,7 +432,6 @@ def _inspect_numeric(name: str, stats: pd.Series, detail: cols.ColumnDetail) -> 
     )
     _metric(skew, "Skewness", _format_stat("skew", stats["skew"]), stats["shape"] or None)
 
-    bars = detail.bars
     chart = st.segmented_control(
         "Chart",
         list(_NUMERIC_CHART_ICONS),
@@ -453,7 +445,7 @@ def _inspect_numeric(name: str, stats: pd.Series, detail: cols.ColumnDetail) -> 
     if chart == "Boxplot":
         _boxplot(name, stats, detail)
     else:
-        _histogram(name, stats, bars)
+        _histogram(name, stats, detail.bars)
 
     # One card per group, side by side; they wrap to new rows on narrow screens.
     with st.expander("All measures"), st.container(horizontal=True, gap="small"):
@@ -535,7 +527,8 @@ def _boxplot(name: str, stats: pd.Series, detail: cols.ColumnDetail) -> None:
     echarts.show(option, height=_INSPECT_CHART_HEIGHT, key=_numeric_chart_key(name))
 
 
-def _inspect_categorical(name: str, stats: pd.Series) -> None:
+def _inspect_categorical(stats: pd.Series) -> None:
+    """Headline measures of a categorical or boolean column."""
     unique, mode, rare, variants = st.columns(4)
     _metric(unique, "Distinct values", f"{stats['unique']:,}")
     _metric(mode, "Most common", str(stats["mode"]), f"{stats['mode_pct']:.1f}% of the rows")
@@ -554,6 +547,7 @@ def _inspect_categorical(name: str, stats: pd.Series) -> None:
 
 
 def _top_values(name: str, detail: cols.ColumnDetail) -> None:
+    """Spelling variants, if any, and the most common values as horizontal bars."""
     if detail.variants:
         listed = "\n".join(
             f"- {' / '.join(f'`{v!r}`' for v in group)}" for group in detail.variants[:5]
@@ -573,6 +567,7 @@ def _top_values(name: str, detail: cols.ColumnDetail) -> None:
 
 
 def _inspect_dates(name: str, stats: pd.Series, detail: cols.ColumnDetail) -> None:
+    """Headline measures of a date column and its rows over time."""
     # Two rows of three: six metrics in one row cut the dates short.
     first, last, span = st.columns(3)
     frequency, unparsed, future = st.columns(3)
@@ -605,6 +600,7 @@ def _inspect_dates(name: str, stats: pd.Series, detail: cols.ColumnDetail) -> No
 def _inspect_text(
     name: str, kind: SemanticType, stats: pd.Series, detail: cols.ColumnDetail
 ) -> None:
+    """Headline measures of a text or identifier column, its lengths and some examples."""
     if kind is SemanticType.IDENTIFIER:
         st.caption(
             ":material/key: Identifier: (almost) one distinct value per row. Useful to join "
@@ -617,14 +613,9 @@ def _inspect_text(
         f"{stats['len_min']} to {stats['len_max']}",
         f"{stats['len_mean']:.0f} on average",
     )
-    _metric(blank, "Blank", stats["blank"], help_text='Empty or only spaces: "" or "   "')
+    _metric(blank, "Blank", stats["blank"], help_text=_BLANK_HELP)
     _metric(unique, "Distinct", f"{stats['unique_pct']:.1f}%")
-    _metric(
-        repeated,
-        "Repeated values",
-        f"{stats['repeated']:,}",
-        help_text="Rows whose value appears more than once",
-    )
+    _metric(repeated, "Repeated values", f"{stats['repeated']:,}", help_text=_REPEATED_HELP)
 
     chart, examples = st.columns([3, 2])
     with chart:
@@ -641,6 +632,7 @@ def _inspect_text(
 
 
 def _numeric_table(table: pd.DataFrame) -> None:
+    """Numeric table, with the groups of measures the user picks."""
     groups = st.pills(
         "Measures",
         list(_NUMERIC_GROUPS),
@@ -648,27 +640,23 @@ def _numeric_table(table: pd.DataFrame) -> None:
         default=_NUMERIC_DEFAULT_GROUPS,
         key=state.widget_key("numeric_groups"),
     )
-    order = ["column"] + [
+    order = [_NAME_COLUMN] + [
         key for group in _NUMERIC_GROUPS if group in groups for key in _NUMERIC_GROUPS[group]
     ]
-    st.dataframe(
-        table,
-        hide_index=True,
-        column_order=order,
-        column_config=_numeric_column_config(),
-        height=_table_height(len(table)),
-        row_height=_CFG.table_row_height,
-    )
+    config: dict[str, Any] = {}
+    for key, (label, fmt, help_text) in _NUMERIC_MEASURES.items():
+        if key in _TEXT_MEASURES:
+            config[key] = st.column_config.TextColumn(label, help=help_text)
+        else:
+            config[key] = st.column_config.NumberColumn(label, format=fmt, help=help_text)
+    _stats_table(table, config, column_order=order)
 
 
 def _categorical_table(table: pd.DataFrame) -> None:
-    st.dataframe(
+    """Categorical and boolean table."""
+    _stats_table(
         table,
-        hide_index=True,
-        height=_table_height(len(table)),
-        row_height=_CFG.table_row_height,
-        column_config={
-            "column": st.column_config.TextColumn("Column", pinned=True),
+        {
             "unique": st.column_config.NumberColumn("Distinct"),
             "mode": st.column_config.TextColumn("Most common"),
             "mode_pct": st.column_config.ProgressColumn(
@@ -686,13 +674,10 @@ def _categorical_table(table: pd.DataFrame) -> None:
 
 
 def _dates_table(table: pd.DataFrame) -> None:
-    st.dataframe(
+    """Date table."""
+    _stats_table(
         table,
-        hide_index=True,
-        height=_table_height(len(table)),
-        row_height=_CFG.table_row_height,
-        column_config={
-            "column": st.column_config.TextColumn("Column", pinned=True),
+        {
             "min": st.column_config.DatetimeColumn("From", format="YYYY-MM-DD"),
             "max": st.column_config.DatetimeColumn("To", format="YYYY-MM-DD"),
             "span_days": st.column_config.NumberColumn("Span (days)"),
@@ -708,26 +693,41 @@ def _dates_table(table: pd.DataFrame) -> None:
 
 
 def _text_table(table: pd.DataFrame) -> None:
-    st.dataframe(
+    """Text and identifier table."""
+    _stats_table(
         table,
-        hide_index=True,
-        height=_table_height(len(table)),
-        row_height=_CFG.table_row_height,
-        column_config={
-            "column": st.column_config.TextColumn("Column", pinned=True),
+        {
             "semantic_type": st.column_config.TextColumn("Type"),
             "len_min": st.column_config.NumberColumn("Min length"),
             "len_mean": st.column_config.NumberColumn("Avg length", format="%.1f"),
             "len_max": st.column_config.NumberColumn("Max length"),
-            "blank": st.column_config.NumberColumn(
-                "Blank", help='Empty or only spaces: "" or "   "'
-            ),
+            "blank": st.column_config.NumberColumn("Blank", help=_BLANK_HELP),
             "unique_pct": st.column_config.NumberColumn("Distinct", format="%.1f%%"),
-            "repeated": st.column_config.NumberColumn(
-                "Repeated", help="Rows whose value appears more than once"
-            ),
+            "repeated": st.column_config.NumberColumn("Repeated", help=_REPEATED_HELP),
             "example": st.column_config.TextColumn("Example", width="large"),
         },
+    )
+
+
+def _stats_table(
+    table: pd.DataFrame, column_config: dict[str, Any], column_order: list[str] | None = None
+) -> None:
+    """A per-type table: one row per column, its name pinned, sized to its rows.
+
+    Args:
+        column_config: ``column_config`` of the measures; the name column is added here.
+        column_order: Columns shown, in order. None shows every column of ``table``.
+    """
+    st.dataframe(
+        table,
+        hide_index=True,
+        column_order=column_order,
+        column_config={
+            _NAME_COLUMN: st.column_config.TextColumn("Column", pinned=True),
+            **column_config,
+        },
+        height=_table_height(len(table)),
+        row_height=_CFG.table_row_height,
     )
 
 
@@ -836,7 +836,7 @@ def _correlation() -> None:
     _about(_CORRELATION_HELP)
 
 
-# HELP TEXTS
+# Help texts
 
 
 def _issues_help() -> str:
@@ -917,7 +917,7 @@ Measures how much two numeric columns move together, from -1 to +1.
 """
 
 
-# HELPERS
+# Helpers
 
 
 @dataclasses.dataclass(frozen=True, eq=False)
@@ -1019,19 +1019,26 @@ def _metric(
 
 
 def _num(value: float) -> str:
+    """A measure in the unit of the column (median, whiskers...), or a dash if undefined."""
     return "—" if pd.isna(value) else f"{value:,.4g}"
 
 
 def _format_stat(key: str, value: Any) -> str:
-    if key in ("shape", "outliers_label"):
+    """Measure ``key`` of the numeric table as text, in the format ``_NUMERIC_MEASURES`` gives
+    it in the table, plus thousands separators. A dash if it is undefined.
+    """
+    if key in _TEXT_MEASURES:
         return str(value) or "—"
     if pd.isna(value):
         return "—"
-    if key in ("count", "zeros", "negatives", "infinite", "unparsed"):
+    fmt = _NUMERIC_MEASURES[key][1]
+    if fmt is None:
+        # Measures without a number format are counts.
         return f"{int(value):,}"
-    if key in ("skew", "kurtosis"):
-        return f"{value:+.2f}"
-    return f"{value:,.4g}"
+    # "%+.2f" -> "+,.2f": printf format to format spec, sign first.
+    spec = fmt.removeprefix("%")
+    sign = "+" if spec.startswith("+") else ""
+    return format(value, f"{sign},{spec.removeprefix('+')}")
 
 
 def _badge(kind: IssueKind) -> str:
@@ -1041,6 +1048,7 @@ def _badge(kind: IssueKind) -> str:
 
 
 def _format_bytes(n: int) -> str:
+    """Size in the largest unit that keeps it above 1: "512 B", "1.5 MB"."""
     size = float(n)
     for unit in ("B", "KB", "MB"):
         if size < 1024:

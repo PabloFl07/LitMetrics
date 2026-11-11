@@ -126,6 +126,11 @@ def heatmap_options(matrix: pd.DataFrame, colors: ChartColors) -> dict[str, Any]
     }
 
 
+def heatmap_height(n_columns: int) -> str:
+    """Height that keeps the heatmap cells readable."""
+    return f"{max(320, 28 * n_columns + 140)}px"
+
+
 def bar_options(
     labels: list[str], values: list[float], colors: ChartColors, unit: str = ""
 ) -> dict[str, Any]:
@@ -151,11 +156,6 @@ def bar_options(
         },
         "series": [{"type": "bar", "data": values, "itemStyle": {"color": colors.accent}}],
     }
-
-
-def heatmap_height(n_columns: int) -> str:
-    """Height that keeps the heatmap cells readable."""
-    return f"{max(320, 28 * n_columns + 140)}px"
 
 
 def histogram_options(

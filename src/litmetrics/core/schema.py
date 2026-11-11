@@ -295,17 +295,6 @@ def _by_unique(series: pd.Series, convert: Callable[[pd.Series], pd.Series]) -> 
     return pd.Series(converted[codes], index=series.index, name=series.name)
 
 
-def prepare_dataset(dataset: LoadedDataset) -> tuple[LoadedDataset, Schema]:
-    """Infer the schema of a freshly read dataset and convert its columns to match it.
-
-    Returns:
-        The dataset with converted columns (and its ``unparsed``), and its schema.
-    """
-    result = apply_schema(dataset.df, infer_schema(dataset.df))
-    typed = dataclasses.replace(dataset, df=result.df, unparsed=result.unparsed)
-    return typed, result.schema
-
-
 def _to_dates(series: pd.Series) -> pd.Series:
     """``series`` as timezone-naive ``datetime64``. Values that are not dates become missing."""
     if ptypes.is_datetime64_any_dtype(series):
@@ -363,3 +352,14 @@ def _date_format(series: pd.Series) -> tuple[str, bool]:
     if scores[best] >= DATETIME_MIN_PARSED:
         return fmt, dayfirst
     return "mixed", dayfirst
+
+
+def prepare_dataset(dataset: LoadedDataset) -> tuple[LoadedDataset, Schema]:
+    """Infer the schema of a freshly read dataset and convert its columns to match it.
+
+    Returns:
+        The dataset with converted columns (and its ``unparsed``), and its schema.
+    """
+    result = apply_schema(dataset.df, infer_schema(dataset.df))
+    typed = dataclasses.replace(dataset, df=result.df, unparsed=result.unparsed)
+    return typed, result.schema
