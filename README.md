@@ -147,4 +147,5 @@ uv run python scripts/bench_profile.py   # time Load + Profile on 3 M rows
 - [`docs/data-loading.md`](docs/data-loading.md): how a file becomes the active dataset.
 - [`docs/performance.md`](docs/performance.md): rules that keep the app fast on large data.
 - [`docs/styling.md`](docs/styling.md): themes, style variants, CSS variables and selectors.
+- [`CHANGELOG.md`](CHANGELOG.md): what changed in each version.
 - [`AGENTS.md`](AGENTS.md): architecture rules, conventions and commands for LLMs.
