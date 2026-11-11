@@ -7,7 +7,7 @@
 [![Python](https://img.shields.io/badge/python-3.14-3776AB?logo=python&logoColor=white)](https://www.python.org/)
 [![Streamlit](https://img.shields.io/badge/streamlit-1.66-FF4B4B?logo=streamlit&logoColor=white)](https://streamlit.io/)
 [![uv](https://img.shields.io/endpoint?url=https://raw.githubusercontent.com/astral-sh/uv/main/assets/badge/v0.json)](https://github.com/astral-sh/uv)
-[![Version](https://img.shields.io/badge/version-0.1.0-blue)](pyproject.toml)
+[![Version](https://img.shields.io/badge/version-0.3.0-blue)](pyproject.toml)
 
 </div>
 
@@ -33,8 +33,8 @@ header, dates and numbers stored as text, and datasets with millions of rows.
 
 ### Load
 
-- **Automatic format detection**: encoding (BOM, UTF‑8, cp1252, latin‑1), separator
-   and whether the first row is a header.
+- **Automatic format detection**: encoding (BOM, UTF‑8, cp1252, latin‑1), separator, decimal
+  mark (`3.5` or `3,5`) and whether the first row is a header.
 - **Fast reading** with the pyarrow CSV engine, falling back to pandas' C engine for files
   pyarrow cannot parse.
 - **Clear error messages** for empty, binary, malformed or mixed-encoding files. A failed
@@ -55,8 +55,13 @@ header, dates and numbers stored as text, and datasets with millions of rows.
   top values, date ranges, text lengths and examples).
 - **Missing values**: by column, by row, and a sample of incomplete rows.
 - **Correlation**: Pearson or Spearman heatmap of the numeric columns and the strongest pairs.
-- **Skip columns**: leave out hard to deal with dada such as codes stored as numbers (phone numbers, postal codes)
-  so they do not distort the statistics.
+- **Skip columns**: leave out data that is hard to deal with, such as codes stored as numbers
+  (phone numbers, postal codes), so it does not distort the statistics.
+
+### Look
+
+- **Five style variants**, each a Streamlit theme plus a stylesheet, in light and dark mode.
+  Charts follow the theme. Variants 0 to 3 meet WCAG AA contrast in both modes.
 
 ### Built for large datasets
 
@@ -84,6 +89,13 @@ The app opens at <http://localhost:8501>. Arguments after `litmetrics` are passe
 uv run litmetrics --server.port 8502
 ```
 
+Pick a style variant (0 to 4, default 0) with `--style`, or with the `LITMETRICS_STYLE`
+environment variable:
+
+```bash
+uv run litmetrics --style 2
+```
+
 ## Project structure
 
 ```
@@ -93,13 +105,23 @@ src/litmetrics/
 ├── core/               Pure logic, no Streamlit
 │   ├── io/             Source, loaders, format detection
 │   ├── schema.py       Semantic types and column conversion
-│   ├── profile.py      Missing values, duplicates, sampling, correlation, issues
-│   └── columns.py      Per-column tables and detail
+│   ├── profile.py      Missing values, duplicates, correlation, issues
+│   ├── columns.py      Per-column tables and detail
+│   ├── sampling.py     Random samples with a fixed seed
+│   └── parallel.py     One column per thread for numpy work
 └── ui/                 Streamlit layer
     ├── state.py        Session state
     ├── cache.py        Cache wrappers
     ├── charts.py       ECharts option builders
+    ├── echarts.py      Draws charts with the theme of the page
+    ├── theme.py        Colors and fonts read from the theme
+    ├── style.py        Stylesheets, page header and cards
+    ├── tables.py       Rows prepared for st.dataframe
+    ├── themes/         Streamlit theme of each style variant
+    ├── styles/         Stylesheet of each style variant
     └── pages/          One module per page
+tests/                  pytest and AppTest smoke tests
+scripts/                bench_profile.py: benchmark of Load and Profile
 docs/                   Reference documentation
 ```
 
@@ -107,9 +129,10 @@ docs/                   Reference documentation
 
 ```bash
 uv sync                          # install, including dev tools
-uv run pytest -q                 # tests (about 2 s)
+uv run pytest -q                 # tests (about 5 s)
 uv run ruff format src tests     # format
 uv run ruff check src tests      # lint
+uv run python scripts/bench_profile.py   # time Load + Profile on 3 M rows
 ```
 
 - Dependencies are pinned in `uv.lock`. Add them with `uv add <package>`
@@ -123,4 +146,5 @@ uv run ruff check src tests      # lint
 
 - [`docs/data-loading.md`](docs/data-loading.md): how a file becomes the active dataset.
 - [`docs/performance.md`](docs/performance.md): rules that keep the app fast on large data.
+- [`docs/styling.md`](docs/styling.md): themes, style variants, CSS variables and selectors.
 - [`AGENTS.md`](AGENTS.md): architecture rules, conventions and commands for LLMs.
