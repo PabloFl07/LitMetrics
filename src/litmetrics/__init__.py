@@ -5,8 +5,9 @@ import sys
 from collections.abc import MutableMapping
 from pathlib import Path
 
-# Project root: theme files are found from here (``StyleConfig.themes_dir``).
-_ROOT = Path(__file__).resolve().parents[2]
+# Folder of the package: theme files are found from here (``StyleConfig.themes_dir``), so they
+# are found in a clone of the repository and in an installed package alike.
+_PACKAGE = Path(__file__).resolve().parent
 
 
 def main() -> None:
@@ -17,9 +18,10 @@ def main() -> None:
     command-line arguments are passed on to ``streamlit run``
     (e.g. ``uv run litmetrics --style 2 --server.port 8502``).
 
-    The theme is always passed as an absolute ``--theme.base``: Streamlit only reads
-    ``.streamlit/config.toml`` from the directory the app starts in, so without it the app
-    started from any other directory has no theme and every chart fails.
+    The theme is always passed as an absolute ``--theme.base``, and the upload limit as
+    ``--server.maxUploadSize``: Streamlit only reads ``.streamlit/config.toml`` from the
+    directory the app starts in, so without them the app started from any other directory (or
+    installed as a package) has no theme, every chart fails and large files are rejected.
     """
     # Imported here: this module runs on any ``import litmetrics...``, and ``core`` must stay
     # importable without loading Streamlit.
@@ -32,7 +34,8 @@ def main() -> None:
 
 
 def streamlit_args(argv: list[str], environ: MutableMapping[str, str]) -> list[str]:
-    """Arguments for ``streamlit run``: ``argv`` without ``--style``, plus the theme.
+    """Arguments for ``streamlit run``: ``argv`` without ``--style``, plus the theme and the
+    upload limit (``LoadConfig.max_upload_mb``) unless ``argv`` sets one.
 
     Sets ``LITMETRICS_STYLE`` in ``environ`` to the chosen variant: the app process reads it to
     load the stylesheet that goes with the theme.
@@ -40,18 +43,21 @@ def streamlit_args(argv: list[str], environ: MutableMapping[str, str]) -> list[s
     Raises:
         SystemExit: The variant is not a number or has no theme file.
     """
-    from litmetrics.config import StyleConfig
+    from litmetrics.config import LoadConfig, StyleConfig
 
     value, rest = _pop_style(argv)
     if value == "":
         sys.exit("--style needs a variant number, e.g. --style 2.")
     variant = value or environ.get(StyleConfig.env_var) or str(StyleConfig.default_variant)
-    theme = _ROOT / StyleConfig.themes_dir / f"theme_{variant}.toml"
+    theme = _PACKAGE / StyleConfig.themes_dir / f"theme_{variant}.toml"
     if not variant.isdigit() or not theme.is_file():
         sys.exit(f"Unknown style {variant!r}: there is no {theme}.")
     environ[StyleConfig.env_var] = variant
-    # A command-line option wins over the base set in .streamlit/config.toml.
-    return [f"--theme.base={theme}", *rest]
+    # Command-line options win over .streamlit/config.toml.
+    args = [f"--theme.base={theme}"]
+    if not any(a.startswith("--server.maxUploadSize") for a in rest):
+        args.append(f"--server.maxUploadSize={LoadConfig.max_upload_mb}")
+    return [*args, *rest]
 
 
 def _pop_style(args: list[str]) -> tuple[str | None, list[str]]:

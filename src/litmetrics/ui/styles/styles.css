@@ -1,6 +1,6 @@
 /*
  * Style variant 0 (default) · Slate Blue: the navigation bar and soft card shadows of variant 1, the
- * compact page header, KPI cards and spacing of variant 2. Theme: .streamlit/themes/theme_0.toml.
+ * compact page header, KPI cards and spacing of variant 2. Theme: ui/themes/theme_0.toml.
  * Loaded by ui/style.py after the --lm-* variables written by ui/theme.py and after
  * styles_base.css, the rules shared by variants 0 to 3. Only what this variant does its own way.
  *

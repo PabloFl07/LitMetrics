@@ -1,6 +1,6 @@
 /*
  * Style variant 2 · Graphite Blue: dense and flat, hairlines instead of shadows.
- * Theme: .streamlit/themes/theme_2.toml.
+ * Theme: ui/themes/theme_2.toml.
  * Loaded by ui/style.py after the --lm-* variables written by ui/theme.py and after
  * styles_base.css, the rules shared by variants 0 to 3. Only what this variant does its own way.
  *

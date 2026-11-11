@@ -1,16 +1,17 @@
 # Styling
 
 How the app gets its look: theme files, style variants, the CSS variables derived from the
-theme, the stylesheets and the selectors they may use. It covers `.streamlit/`,
-`ui/theme.py`, `ui/style.py` and `ui/styles/`.
+theme, the stylesheets and the selectors they may use. It covers `ui/themes/`, `ui/styles/`,
+`ui/theme.py`, `ui/style.py` and `.streamlit/config.toml`.
 
 ## Overview
 
 ```
 uv run litmetrics --style <n>
       │  __init__.streamlit_args
-      ├──► --theme.base=<root>/.streamlit/themes/theme_<n>.toml   (Streamlit reads the theme)
-      └──► LITMETRICS_STYLE=<n>                                    (the app picks the stylesheet)
+      ├──► --theme.base=<package>/ui/themes/theme_<n>.toml   (Streamlit reads the theme)
+      ├──► --server.maxUploadSize=<LoadConfig.max_upload_mb>
+      └──► LITMETRICS_STYLE=<n>                               (the app picks the stylesheet)
               │
               ▼
 app.py ──► style.apply()   (every rerun, before the page draws anything)
@@ -26,7 +27,7 @@ Two layers, with a strict split:
 
 | Layer | Where | Sets |
 | --- | --- | --- |
-| Theme | `.streamlit/themes/theme_<n>.toml` | Colors (both modes), fonts, font sizes, radii, padding, widget borders |
+| Theme | `src/litmetrics/ui/themes/theme_<n>.toml` | Colors (both modes), fonts, font sizes, radii, padding, widget borders |
 | Stylesheet | `src/litmetrics/ui/styles/` | Only what the theme cannot set: shadows, cards, tab weight, the active nav link, focus rings... |
 
 Charts follow the theme too: builders in `ui/charts.py` take `theme.chart_colors()` and
@@ -56,13 +57,14 @@ LITMETRICS_STYLE=3 uv run litmetrics
 - A variant with no theme file stops the command with `Unknown style ...`.
 - A variant with a theme but no stylesheet of its own falls back to `styles.css`
   (`style.stylesheet`).
-- `litmetrics` always passes the theme as an absolute `--theme.base`: Streamlit only reads
-  `.streamlit/config.toml` from the directory it starts in, and without a theme every chart
-  fails. The relative `base` in `config.toml` is only for a plain `streamlit run` from the
-  project root.
+- `litmetrics` always passes the theme as an absolute `--theme.base` (and the upload limit as
+  `--server.maxUploadSize`): Streamlit only reads `.streamlit/config.toml` from the directory
+  it starts in, and without a theme every chart fails. The themes live inside the package, so
+  this also works when LitMetrics is installed instead of run from a clone. The relative
+  `base` in `config.toml` is only for a plain `streamlit run` from the project root.
 
-Settings live in `StyleConfig` (`config.py`): `env_var`, `default_variant`, `themes_dir`,
-`standalone_variants`.
+Settings live in `StyleConfig` (`config.py`): `env_var`, `default_variant`, `themes_dir`
+(relative to the package), `standalone_variants`.
 
 ## Theme files
 

@@ -1,6 +1,6 @@
 """Colors and fonts of the active theme, for the parts of the look Streamlit does not draw.
 
-The theme file of the style variant (``.streamlit/themes/theme_<n>.toml``) is the only place
+The theme file of the style variant (``ui/themes/theme_<n>.toml``) is the only place
 colors are written. This module reads both modes from it and turns them into:
 
 - CSS variables for the stylesheets (``css_variables``). Each one is

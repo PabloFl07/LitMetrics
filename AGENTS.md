@@ -11,7 +11,7 @@ Status: Load and Profile work. Home and Visualization are stubs. Statistics has 
 uv sync                                       # install (Python 3.14, deps pinned in uv.lock)
 uv run litmetrics                             # run the app (args go to streamlit run)
 uv run litmetrics --style 2                   # run it with style variant 2 (docs/styling.md)
-uv run pytest -q                              # all tests (~2 s)
+uv run pytest -q                              # all tests (~5 s)
 uv run ruff format src tests                  # format
 uv run ruff check src tests                   # lint
 uv run python scripts/bench_profile.py        # time Load + Profile on 3 M rows (docs/performance.md)
@@ -45,6 +45,7 @@ src/litmetrics/
     theme.py        Reads the theme (both modes): CSS variables --lm-* and chart colors
     style.py        Injects the variant stylesheet, page header and cards (``style.card``)
     tables.py       Rows prepared for ``st.dataframe`` (``tables.for_display`` for previews)
+    themes/         theme_<n>.toml: Streamlit theme of each style variant (docs/styling.md)
     styles/         Stylesheets of the style variants (docs/styling.md):
       styles_base.css Rules shared by style variants 0-3, loaded before the variant's own
       styles.css      CSS of style variant 0; styles_<n>.css of variant n
@@ -85,7 +86,7 @@ drafts/           Design notes and plans (Spanish). Intent, not truth: the code 
 - A new file format = a new class with `load(source, options) -> LoadedDataset` in `core/io/`.
 - Thresholds and limits go in `config.py`, not as literals in pages.
 - Colors, fonts and radii go in the theme file of each style variant
-  (`.streamlit/themes/theme_<n>.toml`); `.streamlit/config.toml` only sets `theme.base`. The
+  (`ui/themes/theme_<n>.toml`); `.streamlit/config.toml` only sets `theme.base`. The
   stylesheets (`ui/styles/styles.css`, `ui/styles/styles_<n>.css`) only add what the theme
   cannot set, use colors only through `var(--lm-*)` (from `ui/theme.py`), target our elements
   by `key` (`.st-key-<key>`) and Streamlit ones by `data-testid` / ARIA, never by

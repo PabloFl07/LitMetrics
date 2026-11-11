@@ -1,5 +1,6 @@
 # Style variant 4: the original LitMetrics theme (Inter, slate surfaces, blue accent), kept as it
-# was in .streamlit/config.toml. Its stylesheet is src/litmetrics/ui/styles/styles_4.css.
+# was in .streamlit/config.toml (v0.2.0). Its stylesheet is
+# src/litmetrics/ui/styles/styles_4.css.
 # How variants work: docs/styling.md.
 
 [theme]

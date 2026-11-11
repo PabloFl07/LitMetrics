@@ -1,14 +1,15 @@
+# Only used by a plain ``streamlit run`` started from the project root. ``uv run litmetrics``
+# passes both settings on the command line, so it works from any directory and when installed.
+# See docs/styling.md.
+
 [server]
+# Largest upload (MB). Same value as ``LoadConfig.max_upload_mb`` (tests/test_cli.py).
 maxUploadSize = 700
 
-# The theme lives in .streamlit/themes/theme_<n>.toml, one file per style variant, and each
-# variant has its stylesheet in src/litmetrics/ui/styles/ (variant 0: styles.css, n:
-# styles_<n>.css).
-# Keep every theme key out of this file: a key set here overrides the same key of every
-# variant. Pick a variant with ``uv run litmetrics --style <n>``; without it, variant 0 is used.
-# ``litmetrics`` always passes the absolute path of the theme on the command line, which wins
-# over this file. The relative path below is only used by a plain ``streamlit run`` started from
-# the project root. See docs/styling.md.
-
+# The theme lives in src/litmetrics/ui/themes/theme_<n>.toml, one file per style variant, and
+# each variant has its stylesheet in src/litmetrics/ui/styles/ (variant 0: styles.css, n:
+# styles_<n>.css). Pick a variant with ``uv run litmetrics --style <n>``; without it, variant
+# 0 is used. Keep every theme key out of this file: a key set here overrides the same key of
+# every variant.
 [theme]
-base = ".streamlit/themes/theme_0.toml"
+base = "src/litmetrics/ui/themes/theme_0.toml"

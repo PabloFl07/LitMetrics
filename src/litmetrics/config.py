@@ -28,8 +28,9 @@ class StyleConfig:
     env_var: str = "LITMETRICS_STYLE"
     # Variant used when the variable is not set.
     default_variant: int = 0
-    # Folder of the theme files, relative to the project root.
-    themes_dir: str = ".streamlit/themes"
+    # Folder of the theme files, relative to the package (``src/litmetrics/``). Inside the
+    # package, so an installed ``litmetrics`` finds them too.
+    themes_dir: str = "ui/themes"
     # Variants whose stylesheet stands alone, without the shared rules of ``styles_base.css``.
     standalone_variants: tuple[int, ...] = (4,)
 
@@ -38,6 +39,10 @@ class StyleConfig:
 class LoadConfig:
     """Settings of the Load page and of the dataset cache."""
 
+    # Largest file (MB) the uploader accepts. ``litmetrics`` passes it as
+    # ``--server.maxUploadSize``; ``.streamlit/config.toml`` repeats it for a plain
+    # ``streamlit run`` (tests/test_cli.py checks both agree).
+    max_upload_mb: int = 700
     # Rows shown in the preview table.
     preview_rows: int = 100
     # Height (px) of the preview table.

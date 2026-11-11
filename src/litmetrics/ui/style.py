@@ -1,7 +1,7 @@
 """Look of the app beyond the theme: the stylesheet of the style variant, the CSS variables
 derived from the theme, and the markup shared by every page (header, cards).
 
-Colors, fonts and radii live in the theme file of the variant (``.streamlit/themes/``). The
+Colors, fonts and radii live in the theme file of the variant (``ui/themes/``). The
 stylesheet only adds what the theme cannot set, using the ``--lm-*`` variables written by
 ``ui/theme.py``. How variants work: docs/styling.md.
 """
