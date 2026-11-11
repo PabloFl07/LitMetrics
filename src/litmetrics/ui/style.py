@@ -16,7 +16,8 @@ from streamlit.delta_generator import DeltaGenerator
 from litmetrics.config import StyleConfig
 from litmetrics.ui import theme
 
-_HERE = Path(__file__).parent
+# Folder with the stylesheets of every style variant.
+_STYLES = Path(__file__).parent / "styles"
 
 
 def variant() -> int:
@@ -30,8 +31,8 @@ def stylesheet(number: int) -> Path:
 
     Falls back to ``styles.css`` when the variant has no stylesheet of its own.
     """
-    path = _HERE / (f"styles_{number}.css" if number else "styles.css")
-    return path if path.is_file() else _HERE / "styles.css"
+    path = _STYLES / (f"styles_{number}.css" if number else "styles.css")
+    return path if path.is_file() else _STYLES / "styles.css"
 
 
 def stylesheets(number: int) -> tuple[Path, ...]:
@@ -42,7 +43,7 @@ def stylesheets(number: int) -> tuple[Path, ...]:
     own = stylesheet(number)
     if number in StyleConfig.standalone_variants and own.name != "styles.css":
         return (own,)
-    return (_HERE / "styles_base.css", own)
+    return (_STYLES / "styles_base.css", own)
 
 
 @cache

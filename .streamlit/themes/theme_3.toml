@@ -1,6 +1,6 @@
 # Style variant 3 · Canvas Navy: BI canvas. A gray page with white cards in light mode (cards
 # lighter than the page in dark mode too), blue-indigo accent, 12 px radii, KPI cards with an
-# accent rule on the left (src/litmetrics/ui/styles_3.css).
+# accent rule on the left (src/litmetrics/ui/styles/styles_3.css).
 #
 # Here secondaryBackgroundColor is the card and widget surface, lighter than the page in both
 # modes. Inputs are white on the gray canvas, as in most BI tools.

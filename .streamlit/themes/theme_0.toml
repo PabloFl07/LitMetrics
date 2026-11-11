@@ -1,7 +1,7 @@
 # Style variant 0 (default) · Slate Blue: mix of the others. Page colors of variant 1 a little grayer
 # (dark mode stays lighter than variant 2), navigation bar of variant 1, blue accent of variant 2
 # slightly muted, IBM Plex type, and the compact sizes and spacing of variant 2
-# (src/litmetrics/ui/styles.css).
+# (src/litmetrics/ui/styles/styles.css).
 #
 # Accent scale (muted blue): 50 #EEF3FC · 100 #DCE6F9 · 200 #BBCEF3 · 300 #9CBDF2 · 400 #6E97E6
 #   500 #4A7BDE · 600 #2E5FD3 · 700 #2250BE · 800 #1F4399 · 900 #1E3A78
