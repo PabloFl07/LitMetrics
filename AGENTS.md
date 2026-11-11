@@ -33,8 +33,8 @@ src/litmetrics/
     io/sniffing.py  Detects separator, encoding, header and decimal mark -> CsvOptions
     io/csv_loader.py
     schema.py       Semantic type of each column, and conversion to its dtype at load time
-    profile.py      Base pass (missing, distinct, duplicates), sampling, correlation, issues
-    columns.py      Column table of Profile: overview, per-type tables, data of one column
+    profile.py      Base pass (missing, distinct, duplicates), correlation, issues
+    columns.py      Column table of Profile: overview, per-type tables, one column (inspector)
     sampling.py     Random samples with a fixed seed (numpy positions), shared by every module
     parallel.py     map_columns: one column per thread, for numpy work only (R-P8)
   ui/             The only package that imports streamlit
@@ -44,6 +44,7 @@ src/litmetrics/
     echarts.py      The only module importing streamlit_echarts: ``echarts.show`` draws themed charts
     theme.py        Reads the theme (both modes): CSS variables --lm-* and chart colors
     style.py        Injects the variant stylesheet, page header and cards (``style.card``)
+    tables.py       Rows prepared for ``st.dataframe`` (``tables.for_display`` for previews)
     styles_base.css Rules shared by style variants 0-3, loaded before the variant's own
     styles.css      CSS of style variant 0; styles_<n>.css of variant n (docs/styling.md)
     pages/          One module per page
@@ -60,7 +61,10 @@ drafts/           Design notes and plans (Spanish). Intent, not truth: the code 
 - `core/` is pure and testable without Streamlit. Functions take a DataFrame and return new
   objects. Never mutate the argument, never use `inplace=True`.
 - Pages only decide what to show. Computation goes in `core/`, its caching in `ui/cache.py`,
-  chart configuration in `ui/charts.py`.
+  chart configuration in `ui/charts.py`. A cache wrapper only calls one core function with
+  cached inputs: choosing what to compute is core logic (`columns.inspect_column`).
+- The counts of one column come from `BaseProfile.by_column.loc[name]`, not from indexing
+  `BaseProfile.columns` again.
 - Session state goes through `ui/state.py` functions. Never write `st.session_state[...]`
   anywhere else. New keys get a private constant, a default in `_defaults()` and typed accessors.
 - A widget whose options depend on the dataset columns uses `key=state.widget_key("name")`, so
@@ -123,7 +127,8 @@ drafts/           Design notes and plans (Spanish). Intent, not truth: the code 
 - `streamlit_echarts` (0.7) cannot even be imported outside a running Streamlit app (not even
   `JsCode`), so `litmetrics.ui.pages.profile` cannot be imported from plain pytest. Test pages
   through `AppTest` (see `tests/ui/`), and test `ui/charts.py` builders directly. JavaScript
-  callbacks in builders use the `Js` marker, converted to `JsCode` in `ui/echarts.py`.
+  callbacks in builders would need a `Js` marker converted to `JsCode` in `ui/echarts.py`: no
+  builder has one yet, so neither exists. The `add-chart` skill has the code to add them.
 - AppTest does not run the chart's JavaScript: selection and chart events are only testable in
   the browser (Playwright).
 - `AppTest.switch_page()` does not work with pages defined as functions. Smoke tests run each

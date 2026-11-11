@@ -254,6 +254,11 @@ Convention for the wrappers:
 `(LoadedDataset, Schema)`. The Profile wrappers (`base_profile`, `rows_with_missing`,
 `correlation`, `numeric_stats`, `categorical_stats`, `datetime_stats`, `text_stats`,
 `column_overview`, `inspect_column`) follow the same pattern with `dataset_id` and `_df`.
+The ones that count values that were not numbers or dates also take
+`LoadedDataset.unparsed` as `_unparsed`: it belongs to the dataset, so the id covers it. Each
+wrapper only calls one function of `core/` with cached inputs; `inspect_column`, for example,
+passes the cached base pass to `columns.inspect_column`, which decides what to compute for
+the type of the column.
 
 When the user leaves columns out of the profile, the data is different, so what depends on the
 set of columns (`base_profile`, `rows_with_missing`) needs a different key:
@@ -275,13 +280,13 @@ when the dataset changes live in one place.
 
 | Key | Content | Reset when |
 |---|---|---|
-| `dataset` | Active `LoadedDataset` or `None` | `clear_dataset` |
-| `dataset_id` | Content hash of the active dataset | `clear_dataset` |
-| `source_id` | Last upload that was processed | Every processed upload; `clear_dataset` |
+| `dataset` | Active `LoadedDataset` or `None` | New content |
+| `dataset_id` | Content hash of the active dataset | New content |
+| `source_id` | Last upload that was processed | Every processed upload |
 | `read_error` | Last upload that could not be read, and its message | Next failed upload |
-| `schema` | `Schema` of the active dataset | New content; `clear_dataset` |
-| `skipped_columns` | Columns the user left out of the profile (tuple) | New content; `clear_dataset` |
-| `w_*` | Widgets that depend on the columns | New content; `clear_dataset` |
+| `schema` | `Schema` of the active dataset | New content |
+| `skipped_columns` | Columns the user left out of the profile (tuple) | New content |
+| `w_*` | Widgets that depend on the columns | New content |
 
 Functions:
 
@@ -292,7 +297,6 @@ Functions:
   `dataset_id` equals the active one it returns `False` and changes nothing else, so uploading
   the same file again keeps the schema and the user's widget choices. Otherwise it clears the
   dependent state, stores the dataset and returns `True`.
-- `clear_dataset()`: forgets the dataset and everything derived from it.
 - `get_dataset()`, `get_dataset_id()`, `get_schema()`, `set_schema()`.
 - `require_dataset()`, `require_dataset_id()`, `require_schema()`: the same, but raise
   `RuntimeError` when nothing is loaded. For code that only runs with a dataset.
