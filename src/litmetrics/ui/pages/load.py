@@ -1,14 +1,15 @@
-"""Load page: upload a CSV file, read it and show what was loaded.
+"""Load page: upload a file, read it and show what was loaded.
 
-A new upload is processed once. Its read options (separator, encoding, header, decimal mark)
-are detected, the file is read through a cache keyed by its content and those options, its
+A new upload is processed once. Its format is chosen by its extension (``core/io/formats.py``),
+the read options of that format are detected (for a CSV: separator, encoding, header, decimal
+mark), the file is read through a cache keyed by its content and those options, its
 columns are converted to the dtype of their semantic type (dates, categories), and the result
 becomes the active dataset in the session state. Uploading the same file again keeps the
 current one.
 
 On every other rerun nothing is read, not even the bytes of the upload: the page only draws the
 active dataset. It stays there after the file is removed from the uploader or the user moves to
-another page. The page shows a summary (rows, columns, encoding, how the file was read) and a
+another page. The page shows a summary (rows, columns, format, how the file was read) and a
 preview of the first rows. The profile of each column is in the Profile page.
 
 If a file cannot be read, the error is shown and the previous dataset, if any, stays active.
@@ -20,18 +21,18 @@ import streamlit as st
 from streamlit.typing import UploadedFile
 
 from litmetrics.config import LoadConfig
+from litmetrics.core.io import formats
 from litmetrics.core.io.base import LoadedDataset, ReadError, Source, compute_dataset_id
-from litmetrics.core.io.sniffing import SEPARATORS, detect_options
 from litmetrics.ui import cache, state, style, tables
 
 
 def load_page() -> None:
     """Entry point registered in app.py."""
-    style.page_header(
-        "Load data",
-        "Upload a CSV file. Separator, encoding, header and decimal mark are detected for you.",
+    names = " or ".join(fmt.name for fmt in formats.FORMATS)
+    style.page_header("Load data", f"Upload a {names} file. How to read it is detected for you.")
+    uploaded = st.file_uploader(
+        "Upload a file", type=list(formats.extensions()), label_visibility="collapsed"
     )
-    uploaded = st.file_uploader("Upload a CSV file", type=["csv"], label_visibility="collapsed")
     if uploaded is not None:
         _load(uploaded)
 
@@ -63,9 +64,9 @@ def _load(uploaded: UploadedFile) -> None:
         st.error(error)
         return
     source = Source(uploaded.getvalue(), uploaded.name, source_id)
-    options = detect_options(source.data)
-    dataset_id = compute_dataset_id(source.data, options)
     try:
+        options = formats.detect_options(source)
+        dataset_id = compute_dataset_id(source.data, options)
         dataset, schema = cache.load_dataset(dataset_id, source, options)
     except ReadError as e:
         # Exceptions are not cached: without this, every rerun would read the file again.
@@ -80,20 +81,17 @@ def _load(uploaded: UploadedFile) -> None:
 
 
 def _summary(dataset: LoadedDataset) -> None:
-    """Rows, columns and encoding of the dataset, and how the file was read."""
+    """Rows, columns and format of the dataset, and how the file was read."""
     # Keyed container: styles.css turns these metrics into cards.
     with st.container(key="headline"):
-        rows, columns, encoding = st.columns(3)
+        rows, columns, file_format = st.columns(3)
     rows.metric("Rows", f"{dataset.n_rows:,}", icon=":material/table_rows:", border=True)
     columns.metric("Columns", dataset.n_cols, icon=":material/view_column:", border=True)
-    encoding.metric("Encoding", dataset.encoding, icon=":material/translate:", border=True)
-    separator = SEPARATORS.get(dataset.separator, repr(dataset.separator))
-    decimal = "Comma (,)" if dataset.decimal == "," else "Dot (.)"
-    header = "first row" if dataset.has_header else "none (columns numbered)"
-    st.caption(
-        f":material/tune: Read with separator **{separator}**, decimal mark **{decimal}**, "
-        f"column names: **{header}**."
-    )
+    file_format.metric("Format", dataset.format, icon=":material/description:", border=True)
+    if dataset.details:
+        # Written by the loader of each format: the page does not know what they mean.
+        details = ", ".join(f"{label} **{value}**" for label, value in dataset.details.items())
+        st.caption(f":material/tune: Read with {details}.")
 
 
 def _preview(dataset: LoadedDataset) -> None:

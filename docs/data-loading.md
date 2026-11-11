@@ -1,6 +1,6 @@
 # Data loading
 
-How a CSV file becomes the active dataset of a session: format detection, parsing, error
+How a file becomes the active dataset of a session: format detection, parsing, error
 handling, caching and session state. It covers the Load page and everything under `core/io/`,
 plus the parts of `ui/state.py` and `ui/cache.py` that keep the dataset.
 
@@ -19,14 +19,14 @@ state.get_read_error? ──yes──► st.error (the remembered message; nothi
         Source(bytes, name, file_id)
               │
               ▼
-        detect_options(bytes) ──► CsvOptions(separator, encoding, has_header, decimal)
+        formats.detect_options(source) ──► options of its format (CSV: CsvOptions)
               │
               ▼
         compute_dataset_id(bytes, options) ──► dataset_id (sha256)
               │
               ▼
         cache.load_dataset(dataset_id, source, options)
-              │   CsvLoader.load ──► LoadedDataset ──► prepare_dataset ──► (typed dataset, schema)
+              │   formats.load ──► LoadedDataset ──► prepare_dataset ──► (typed dataset, schema)
               │        │
               │        └─ ReadError ──► state.set_read_error, st.error, previous dataset kept
               ▼
@@ -39,6 +39,7 @@ state.get_read_error? ──yes──► st.error (the remembered message; nothi
 | Module | Role |
 |---|---|
 | `core/io/base.py` | Format-independent types: `Source`, `LoadedDataset`, `ReadError`, `Loader`, `compute_dataset_id` |
+| `core/io/formats.py` | The supported formats (`FORMATS`), and which one reads a file: `format_for`, `detect_options`, `load` |
 | `core/io/sniffing.py` | Guesses `CsvOptions` (encoding, separator, header, decimal mark) from the bytes |
 | `core/io/csv_loader.py` | `CsvLoader`: turns a `Source` + `CsvOptions` into a `LoadedDataset` |
 | `core/schema.py` | Semantic type of each column, and conversion of each column to the dtype of its type |
@@ -68,10 +69,13 @@ tested with pytest.
 
 **`LoadedDataset`** (frozen, `eq=False`): the parsed result.
 
-- `df`, `name`, `separator`, `encoding`, `has_header`, `decimal`, plus the properties `n_rows`
-  and `n_cols`. The Load page shows how the file was read from them.
+- `df`, `name`, plus the properties `n_rows` and `n_cols`.
+- `format`: name of the file format shown to the user (`"CSV"`).
+- `details`: how the file was read, as label → value, both already text for the user and in
+  the order to show them. `CsvLoader` writes `separator`, `encoding`, `decimal mark` and
+  `column names`. The Load page shows them without knowing the format.
 - `unparsed`: for each date or numeric column that was text in the file, how many values
-  could not be converted and became missing. Empty right after `CsvLoader.load`; filled by
+  could not be converted and became missing. Empty right after `Loader.load`; filled by
   `schema.prepare_dataset`.
 - `eq=False` because comparing two dataclasses would compare their DataFrames, which is
   ambiguous in pandas. Two datasets are "the same" when their `dataset_id` is the same.
@@ -103,14 +107,34 @@ Streamlit reruns the page on every click while the file stays in the uploader. `
 lets those reruns skip everything. `dataset_id` is only computed for a new upload, and decides
 whether the state that depends on the data must be reset.
 
-## Format detection (`core/io/sniffing.py`)
+## Formats (`core/io/formats.py`)
+
+The only module that knows which formats exist. `FORMATS` holds one `FileFormat` per format:
+`name` (shown to the user), `extensions` (lowercase, with the dot), `options_type` (its frozen
+options class), `detect_options(bytes)` and `loader`. Today it has one entry, CSV (`.csv`,
+`CsvOptions`, `sniffing.detect_options`, `CsvLoader`). `ReadOptions` is the union of the
+options classes of every format: the type of the options outside `core/io/`.
+
+- `extensions()`: every supported extension. The uploader of the Load page accepts these.
+- `format_for(name)`: the format of a file, by its extension (case-insensitive). `ReadError`
+  if none matches.
+- `detect_options(source)`: the read options of the file, guessed by its format. This is the
+  only place where the format is chosen by the file name.
+- `load(source, options)`: reads the file with the loader of the format of `options`. Each
+  format has its own options class, so the options carry the format and a file cannot be read
+  with the loader of another one. Options of no format raise `TypeError` (a bug, not a bad file).
+
+`ui/cache.py` and the Load page only call these functions, so they do not change when a format
+is added.
+
+## CSV detection (`core/io/sniffing.py`)
 
 A CSV file does not say how it is written. Reading it with the wrong settings does not always
 fail: it can give one single column, a header taken as a data row, or garbled accents
 (`MÃ¡laga` instead of `Málaga`). Detection avoids asking the user for settings they usually do
 not know.
 
-`detect_options(data)` returns `CsvOptions(separator, encoding, has_header)`. Every function
+`detect_options(data)` returns `CsvOptions(separator, encoding, has_header, decimal)`. Every function
 returns a safe default when the data is not clear (comma, header present) and never raises:
 reporting problems is the loader's job.
 
@@ -249,8 +273,9 @@ Convention for the wrappers:
 - Other arguments must be hashable (frozen dataclasses, tuples).
 - Exceptions are not cached: a `ReadError` is tried again on the next call.
 
-`load_dataset(dataset_id, _source, options)` reads the file and runs
-`schema.prepare_dataset`, with `show_spinner="Reading CSV…"`. It returns
+`load_dataset(dataset_id, _source, options)` reads the file with `formats.load` and runs
+`schema.prepare_dataset`, with `show_spinner="Reading the file…"`. `options` is whatever
+frozen dataclass the format of the file uses. It returns
 `(LoadedDataset, Schema)`. The Profile wrappers (`base_profile`, `rows_with_missing`,
 `correlation`, `numeric_stats`, `categorical_stats`, `datetime_stats`, `text_stats`,
 `column_overview`, `inspect_column`) follow the same pattern with `dataset_id` and `_df`.
@@ -317,7 +342,8 @@ Functions:
    - returns at once if its `file_id` was already processed, before reading its bytes
      (`getvalue()` copies the whole file on every call);
    - if reading it already failed, shows the remembered error and returns;
-   - builds the `Source`, detects the options and computes `dataset_id`;
+   - builds the `Source`, detects the options of its format (`formats.detect_options`) and
+     computes `dataset_id`;
    - calls `cache.load_dataset`, which reads the file and types its columns. On `ReadError`
      it remembers and shows the message and returns **without** marking the upload as
      processed, so the error stays visible on later reruns and the previous dataset stays
@@ -325,8 +351,8 @@ Functions:
      the file again;
    - calls `state.set_dataset` and, only if the content is new, stores the schema returned by
      `load_dataset`.
-3. Draws the active dataset from the session state: a summary (rows, columns, encoding, and how
-   the file was read: separator, decimal mark, header) and the first `LoadConfig.preview_rows`
+3. Draws the active dataset from the session state: a summary (rows, columns, format, and how
+   the file was read: `LoadedDataset.details`) and the first `LoadConfig.preview_rows`
    rows. Only the head is sent to the browser.
 
 Because the dataset lives in the session state, it stays after the file is removed from the
@@ -350,18 +376,17 @@ See the `add-loader` skill for the full checklist. In short:
 
 1. An options dataclass, `@dataclass(frozen=True)`, with tuples instead of lists.
 2. A class in `core/io/` with `load(source, options) -> LoadedDataset` that raises `ReadError`
-   with a user-facing message for every expected failure.
-3. Make `cache.load_dataset` (or a sibling wrapper with the same signature) pick the loader,
-   and keep calling `schema.prepare_dataset` on the result.
-4. Accept the extension in the uploader and choose the loader on the Load page.
-5. Tests in `tests/core/io/`.
+   with a user-facing message for every expected failure, and fills `format` and `details`.
+3. A `FileFormat` entry in `formats.FORMATS`, and its options class added to
+   `formats.ReadOptions`. The cache and the uploader pick it up from there.
+4. Tests in `tests/core/io/`.
 
 ## Tests
 
 `tests/core/io/test_csv_loader.py` covers `CsvLoader`: dtypes, files without a header, cp1252
 with `;`, UTF‑8 with BOM, empty values, decimal commas, the fallback from pyarrow to the C
-engine on ragged rows, and every `ReadError` message. `tests/core/io/test_sniffing.py` covers
-the detection: header, separator, encoding (including a character split between two chunks
+engine on ragged rows, and every `ReadError` message. `tests/core/io/test_formats.py` covers choosing the format
+by extension, choosing the loader by the options, and that `ReadOptions` lists every format. `tests/core/io/test_sniffing.py` covers the detection: header, separator, encoding (including a character split between two chunks
 and a cp1252 byte at the end) and decimal mark. Column typing is tested in
 `tests/core/test_schema.py`, and the Load page in `tests/ui/test_pages_smoke.py` (including
 that a failed upload is read only once).

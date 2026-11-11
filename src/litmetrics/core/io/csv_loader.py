@@ -17,7 +17,10 @@ import pandas as pd
 import pyarrow as pa
 
 from litmetrics.core.io.base import LoadedDataset, ReadError, Source
-from litmetrics.core.io.sniffing import SAMPLE_BYTES, CsvOptions
+from litmetrics.core.io.sniffing import SAMPLE_BYTES, SEPARATORS, CsvOptions
+
+# Name of the format, shown to the user.
+FORMAT_NAME = "CSV"
 
 
 class CsvLoader:
@@ -69,14 +72,17 @@ class CsvLoader:
             raise ReadError(f"'{name}' has no data rows.")
         if not options.has_header:
             df.columns = [f"column_{i}" for i in range(1, df.shape[1] + 1)]
-        return LoadedDataset(
-            df,
-            name,
-            options.separator,
-            options.encoding,
-            has_header=options.has_header,
-            decimal=options.decimal,
-        )
+        return LoadedDataset(df, name, FORMAT_NAME, _details(options))
+
+
+def _details(options: CsvOptions) -> dict[str, str]:
+    """How the file was read, in words for the user (``LoadedDataset.details``)."""
+    return {
+        "separator": SEPARATORS.get(options.separator, repr(options.separator)),
+        "encoding": options.encoding,
+        "decimal mark": "Comma (,)" if options.decimal == "," else "Dot (.)",
+        "column names": "first row" if options.has_header else "none (columns numbered)",
+    }
 
 
 def _read(data: bytes, options: CsvOptions, engine: Literal["pyarrow", "c"]) -> pd.DataFrame:

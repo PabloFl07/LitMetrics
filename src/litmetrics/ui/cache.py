@@ -30,9 +30,8 @@ import streamlit as st
 
 from litmetrics.config import LoadConfig, ProfileConfig
 from litmetrics.core import columns, profile
+from litmetrics.core.io import formats
 from litmetrics.core.io.base import LoadedDataset, Source
-from litmetrics.core.io.csv_loader import CsvLoader
-from litmetrics.core.io.sniffing import CsvOptions
 from litmetrics.core.schema import Schema, SemanticType, prepare_dataset
 
 _PROFILE_MAX = ProfileConfig.cache_max_datasets
@@ -57,17 +56,20 @@ def view_id(dataset_id: str, skipped: Iterable[str]) -> str:
 
 # Exceptions (ReadError) are not cached, so a failed read is tried again on the next call.
 @st.cache_resource(
-    max_entries=LoadConfig.cache_max_datasets, show_spinner="Reading CSV…", show_time=True
+    max_entries=LoadConfig.cache_max_datasets, show_spinner="Reading the file…", show_time=True
 )
 def load_dataset(
-    dataset_id: str, _source: Source, options: CsvOptions
+    dataset_id: str, _source: Source, options: formats.ReadOptions
 ) -> tuple[LoadedDataset, Schema]:
     """Parse ``_source`` with ``options`` and type its columns, once per ``dataset_id``.
+
+    ``options`` are the read options of the file (``formats.detect_options``), and choose the
+    loader. They are a frozen dataclass, which Streamlit hashes into the cache key.
 
     Returns the dataset, with every column converted to the dtype of its semantic type, and its
     schema (see ``schema.prepare_dataset``). Callers must not modify them: they are shared.
     """
-    return prepare_dataset(CsvLoader().load(_source, options))
+    return prepare_dataset(formats.load(_source, options))
 
 
 # Profile: page header, Issues and Missing values

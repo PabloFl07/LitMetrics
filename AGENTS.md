@@ -30,7 +30,8 @@ src/litmetrics/
   config.py       Frozen dataclasses with settings, read as class attributes (LoadConfig.preview_rows)
   core/           Pure logic. NEVER imports streamlit
     io/base.py      Source, LoadedDataset, ReadError, Loader protocol, compute_dataset_id
-    io/sniffing.py  Detects separator, encoding, header and decimal mark -> CsvOptions
+    io/formats.py   Registry of file formats: extension -> options detection and loader
+    io/sniffing.py  Detects separator, encoding, header and decimal mark of a CSV -> CsvOptions
     io/csv_loader.py
     schema.py       Semantic type of each column, and conversion to its dtype at load time
     profile.py      Base pass (missing, distinct, duplicates), correlation, issues
@@ -83,7 +84,9 @@ drafts/           Design notes and plans (Spanish). Intent, not truth: the code 
 - Anything that becomes part of a cache key or of `compute_dataset_id` (options, schema, rules)
   is a `@dataclass(frozen=True)`.
 - User-facing errors from reading a file are `ReadError` with a message shown as is.
-- A new file format = a new class with `load(source, options) -> LoadedDataset` in `core/io/`.
+- A new file format = a new class with `load(source, options) -> LoadedDataset` in `core/io/`
+  plus an entry in `core/io/formats.py`. `ui/` never names a format: what is shown about how
+  a file was read comes from `LoadedDataset.format` and `.details`.
 - Thresholds and limits go in `config.py`, not as literals in pages.
 - Colors, fonts and radii go in the theme file of each style variant
   (`ui/themes/theme_<n>.toml`); `.streamlit/config.toml` only sets `theme.base`. The

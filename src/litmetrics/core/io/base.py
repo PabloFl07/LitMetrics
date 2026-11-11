@@ -4,6 +4,7 @@ Flow of a file through the app:
 
     Source (raw bytes) --Loader.load(options)--> LoadedDataset (DataFrame + how it was read)
 
+Which loader reads a file, and how its options are found, is in ``formats.py``.
 Anything that goes wrong on the way is raised as ``ReadError``, whose message is shown as is.
 """
 
@@ -41,10 +42,10 @@ class LoadedDataset:
     Attributes:
         df: The parsed data.
         name: Name of the original file.
-        separator: Column separator used to read it.
-        encoding: Text encoding used to read it.
-        has_header: Whether the first row of the file held the column names.
-        decimal: Decimal mark of the numbers in the file.
+        format: Name of the file format, as shown to the user ("CSV").
+        details: How the file was read, as label -> value in the order to show them. Both are
+            text for the user (``{"separator": "Comma (,)"}``): each loader writes what applies
+            to its format, so nothing else needs to know the format.
         unparsed: For each date or numeric column stored as text in the file, how many of its
             values could not be read as dates or numbers (they became missing when the column
             was converted).
@@ -52,10 +53,8 @@ class LoadedDataset:
 
     df: pd.DataFrame
     name: str
-    separator: str
-    encoding: str
-    has_header: bool = True
-    decimal: str = "."
+    format: str
+    details: Mapping[str, str] = field(default_factory=dict)
     unparsed: Mapping[str, int] = field(default_factory=dict)
 
     @property
