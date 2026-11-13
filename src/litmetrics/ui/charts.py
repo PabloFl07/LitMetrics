@@ -118,12 +118,25 @@ def heatmap_options(matrix: pd.DataFrame, colors: ChartColors) -> dict[str, Any]
             {
                 "type": "heatmap",
                 "data": data,
-                # Numbers in the cells only while they fit.
-                "label": {"show": len(labels) <= 12},
+                # Smaller numbers as the cells get smaller, so they still fit.
+                "label": {"show": True, "fontSize": heatmap_label_size(len(labels))},
                 "emphasis": {"itemStyle": {"borderColor": colors.emphasis, "borderWidth": 1}},
             }
         ],
     }
+
+
+def heatmap_label_size(n_columns: int) -> int:
+    """Font size (px) of the numbers in the cells of a heatmap of ``n_columns`` columns.
+
+    "-0.12" at 12 px is about 30 px wide, at 9 px about 22 px: wide enough cells at the
+    page widths the heatmap is shown at (full width from ``heatmap_full_width_columns``).
+    """
+    if n_columns <= 8:
+        return 12
+    if n_columns <= 16:
+        return 10
+    return 9
 
 
 def heatmap_height(n_columns: int) -> str:

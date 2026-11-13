@@ -815,7 +815,11 @@ def _correlation() -> None:
             f"{dataset.n_rows:,} rows (random sample)."
         )
 
-    heatmap, pairs = st.columns([3, 2])
+    if len(result.matrix) >= _CFG.heatmap_full_width_columns:
+        # Many columns: full width, so the numbers fit in the cells; the pairs go below.
+        heatmap, pairs = st.container(), st.container()
+    else:
+        heatmap, pairs = st.columns([3, 2])
     with heatmap, style.card("correlation_heatmap"):
         echarts.show(
             charts.heatmap_options(result.matrix, theme.chart_colors()),

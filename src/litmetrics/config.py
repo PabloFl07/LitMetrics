@@ -72,6 +72,9 @@ class ProfileConfig:
     high_correlation: float = 0.9
     # Numeric columns shown at most in the correlation heatmap.
     max_heatmap_columns: int = 30
+    # From this many columns the heatmap takes the whole width (the pairs go below it), so
+    # its cells stay wide enough for their numbers.
+    heatmap_full_width_columns: int = 13
     # Columns drawn at most in the "missing values by column" chart (the most incomplete).
     missing_chart_columns: int = 30
     # Pairs listed in the "most correlated" table.
