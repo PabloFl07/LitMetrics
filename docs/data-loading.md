@@ -19,7 +19,15 @@ state.get_read_error? ──yes──► st.error (the remembered message; nothi
         Source(bytes, name, file_id)
               │
               ▼
-        formats.detect_options(source) ──► options of its format (CSV: CsvOptions)
+  formats.list_parts(source) ──Parts──► state.set_multipart(source, parts)
+              │ None (one dataset)               │  (every rerun, uploader or not)
+              │                                  ▼
+              │                     selectbox (restored from state) ──► part
+              │                                  │
+              │                     read_id = file_id + "/" + part, processed once
+              ▼                                  │
+              ◄──────────────────────────────────┘
+        formats.detect_options(source, part) ──► options of its format (CsvOptions, SqliteOptions)
               │
               ▼
         compute_dataset_id(bytes, options) ──► dataset_id (sha256)
@@ -42,6 +50,10 @@ state.get_read_error? ──yes──► st.error (the remembered message; nothi
 | `core/io/formats.py` | The supported formats (`FORMATS`), and which one reads a file: `format_for`, `detect_options`, `load` |
 | `core/io/sniffing.py` | Guesses `CsvOptions` (encoding, separator, header, decimal mark) from the bytes |
 | `core/io/csv_loader.py` | `CsvLoader`: turns a `Source` + `CsvOptions` into a `LoadedDataset` |
+| `core/io/sqlite_loader.py` | `SqliteLoader` and `table_names`: one table or view of a SQLite database |
+| `core/io/parquet_loader.py` | `ParquetLoader`: a Parquet file |
+| `core/io/feather_loader.py` | `FeatherLoader`: a Feather (V1, V2) or Arrow IPC file |
+| `core/io/arrow_table.py` | `to_frame`: Arrow table of a columnar file → DataFrame, converting the types the app cannot use |
 | `core/schema.py` | Semantic type of each column, and conversion of each column to the dtype of its type |
 | `ui/cache.py` | Cache wrappers, shared by all sessions |
 | `ui/state.py` | The only module that touches `st.session_state` |
@@ -111,21 +123,39 @@ whether the state that depends on the data must be reset.
 
 The only module that knows which formats exist. `FORMATS` holds one `FileFormat` per format:
 `name` (shown to the user), `extensions` (lowercase, with the dot), `options_type` (its frozen
-options class), `detect_options(bytes)` and `loader`. Today it has one entry, CSV (`.csv`,
-`CsvOptions`, `sniffing.detect_options`, `CsvLoader`). `ReadOptions` is the union of the
+options class), `detect_options(bytes)` and `loader`. Today it has four entries: CSV (`.csv`,
+`CsvOptions`, `sniffing.detect_options`, `CsvLoader`), SQLite (`.db`, `.sqlite`,
+`.sqlite3`, `SqliteOptions`, `SqliteLoader`, with parts), Parquet (`.parquet`, `.pq`,
+`ParquetOptions`, `ParquetLoader`) and Feather (`.feather`, `.arrow`, `FeatherOptions`,
+`FeatherLoader`). `ReadOptions` is the union of the
 options classes of every format: the type of the options outside `core/io/`.
 
 - `extensions()`: every supported extension. The uploader of the Load page accepts these.
 - `format_for(name)`: the format of a file, by its extension (case-insensitive). `ReadError`
   if none matches.
-- `detect_options(source)`: the read options of the file, guessed by its format. This is the
-  only place where the format is chosen by the file name.
+- `detect_options(source, part=None)`: the read options of the file, guessed by its format,
+  for the dataset `part` when the file holds several. This is the only place where the format
+  is chosen by the file name.
+- `list_parts(source)`: see "Files with several datasets" below.
 - `load(source, options)`: reads the file with the loader of the format of `options`. Each
   format has its own options class, so the options carry the format and a file cannot be read
   with the loader of another one. Options of no format raise `TypeError` (a bug, not a bad file).
 
 `ui/cache.py` and the Load page only call these functions, so they do not change when a format
 is added.
+
+### Files with several datasets
+
+A database has tables, a workbook has sheets: which one to read cannot be guessed from the
+bytes. Such a format sets `FileFormat.parts` to a `PartsSpec(label, names, select)`:
+
+- `label`: what one dataset is called ("Table").
+- `names(source)`: lists them, raising `ReadError` when the file cannot be read.
+- `select(options, name)`: the options that read the one called `name`.
+
+`list_parts(source)` returns `Parts(label, names)`, or `None` for single-dataset formats, and
+`detect_options(source, part)` applies `select`. The Load page draws a selectbox from `Parts`
+and never names the format, so a new multi-dataset format needs no change outside `core/io/`.
 
 ## CSV detection (`core/io/sniffing.py`)
 
@@ -251,6 +281,64 @@ Notes:
 - After every read, failed or not, Arrow's memory pool gives back the blocks it no longer uses
   (`release_unused`, R-L5): about 1 GB on a 569 MB file.
 
+## Reading a SQLite database (`core/io/sqlite_loader.py`)
+
+`SqliteOptions(table)`: the table or view to read; `None` reads the first one by name.
+`detect_options` has nothing to guess and returns `SqliteOptions()`.
+
+The app only has bytes, so `sqlite3.Connection.deserialize` opens them as an in-memory
+database (no temporary file; the file is in memory twice while reading). The connection is
+read-only (`PRAGMA query_only`) and closed after each read. `table_names` lists tables and
+views sorted by name, leaving out SQLite's own (`sqlite_*`). The table is read with
+`pd.read_sql_query("SELECT * FROM <quoted name>")`; names come from the file and are quoted
+with doubled `"`. BLOB values become a text with their size (`"<1,024 bytes>"`) and the columns
+that had them are listed in `details` ("binary columns"), next to "table".
+
+| Situation | Message to the user |
+|---|---|
+| Empty file | `'x.db' is empty.` |
+| No `SQLite format 3` header (another format renamed) | `'x.db' is not a SQLite database.` |
+| Damaged database | `'x.db' is damaged and cannot be read: <sqlite detail>` |
+| No tables or views | `'x.db' has no tables.` |
+| Table not in the file | `'x.db' has no table called 't'.` |
+| Query fails | `Table 't' of 'x.db' cannot be read: <detail>` |
+| Table without rows | `Table 't' of 'x.db' has no data rows.` |
+
+## Reading Parquet and Feather files (`core/io/parquet_loader.py`, `feather_loader.py`)
+
+Both formats store typed columns, so there is nothing to detect: `ParquetOptions` and
+`FeatherOptions` are empty frozen dataclasses that only carry the format, and
+`detect_options` returns them as they are. Feather V2 is the Arrow IPC file format, so `.arrow`
+files are read as Feather; Feather V1 (deprecated by pyarrow) and LZ4/ZSTD compression are read
+too. Arrow IPC *streams* (`.arrows`) are not.
+
+The bytes are wrapped in `pa.BufferReader` (no copy) and read with `pq.read_table` or
+`feather.read_table`. `arrow_table.to_frame` then turns the Arrow table into a DataFrame:
+
+- integers, floats, text, booleans, timestamps (with or without timezone) and dictionary
+  columns (→ `category`) keep their type;
+- dates become `datetime64` (`date_as_object=False`);
+- times of day become text (`"13:45:00"`), as in a CSV;
+- decimals become `float64`; durations become `float64` seconds;
+- binary values become a text with their size (`"<1,024 bytes>"`), as in SQLite;
+- nested values (lists, structs, maps) become JSON text, so they can be hashed and counted.
+  This goes through Python objects one value at a time: slow on large columns, but rare;
+- a pandas index saved with the file (not a `RangeIndex`) becomes columns again;
+- column names become strings and repeated names get `.1`, `.2`... as `read_csv` does.
+
+Each converted column is listed in `details` under its kind (`"decimal columns": "price (read
+as floating-point numbers)"`); a file with nothing to convert has no `details`. The conversion
+uses `self_destruct` and `split_blocks`, so each Arrow column is freed as soon as it is
+converted, and Arrow's pool is released after each read (R-L5).
+
+| Situation | Message to the user |
+|---|---|
+| Empty file | `'x.parquet' is empty.` |
+| Another format renamed (no `PAR1` at both ends; no `ARROW1`/`FEA1` at the start) | `'x.parquet' is not a Parquet file.` / `'x.feather' is not a Feather (Arrow IPC) file.` |
+| Damaged or truncated file | `'x.parquet' is damaged and cannot be read: <pyarrow detail>` |
+| No columns | `'x.parquet' has no columns.` |
+| No rows | `'x.parquet' has no data rows.` |
+
 ## Caching (`ui/cache.py`)
 
 The cache lives in memory and is **shared by all sessions**, so two users uploading the same
@@ -307,8 +395,11 @@ when the dataset changes live in one place.
 |---|---|---|
 | `dataset` | Active `LoadedDataset` or `None` | New content |
 | `dataset_id` | Content hash of the active dataset | New content |
-| `source_id` | Last upload that was processed | Every processed upload |
-| `read_error` | Last upload that could not be read, and its message | Next failed upload |
+| `source_id` | Last read that was processed (`read_id`: upload, plus part) | Every processed read |
+| `read_error` | Last read (or listing of parts) that failed, and its message | Next failure |
+| `multipart` | Active file with several datasets: its `Source` (bytes kept) and `Parts` | New upload with parts; cleared when a single-dataset file is read |
+| `part` | Dataset of that file picked by the user | New upload with parts |
+| `part_selector` | Selectbox of the dataset (not `w_`: switching must not reset it) | Restored from `part` after visiting another page |
 | `schema` | `Schema` of the active dataset | New content |
 | `skipped_columns` | Columns the user left out of the profile (tuple) | New content |
 | `w_*` | Widgets that depend on the columns | New content |
@@ -328,6 +419,12 @@ Functions:
 - `get_skipped_columns()`, `set_skipped_columns(names)`: columns left out of the profile.
 - `get_read_error(source_id)`, `set_read_error(source_id, message)`: the error of an upload
   that could not be read, so later reruns show it without reading the file again.
+- `get_multipart()`, `set_multipart(source, parts)`, `clear_multipart()`: the active file
+  with several datasets. Its bytes stay in the session (memory: one copy of the file per
+  session) because the uploader forgets its file when another page is shown, and another
+  table must still be readable. `set_part(name)` and `restore_part_widget()`: the chosen
+  dataset, given back to the selectbox (`PART_WIDGET`) after visiting another page, since a
+  widget that is not drawn loses its state.
 - `widget_key(name)`: returns `"w_" + name`. Any widget whose options depend on the columns
   must use `key=state.widget_key(...)`, so a new dataset does not leave it pointing at columns
   that no longer exist.
@@ -339,6 +436,11 @@ Functions:
 
 1. Draws the uploader.
 2. If there is a file, `_load(uploaded)`:
+   - shows the remembered error if listing its parts failed;
+   - for formats with parts, lists them once per upload and keeps the file in the state
+     (`state.set_multipart`); `_part()` then draws the selectbox from the state on every
+     rerun, with or without the file in the uploader, and reads the chosen dataset with
+     `read_id = file_id + "/" + part`, so each table is one read, done once;
    - returns at once if its `file_id` was already processed, before reading its bytes
      (`getvalue()` copies the whole file on every call);
    - if reading it already failed, shows the remembered error and returns;
@@ -385,7 +487,11 @@ See the `add-loader` skill for the full checklist. In short:
 
 `tests/core/io/test_csv_loader.py` covers `CsvLoader`: dtypes, files without a header, cp1252
 with `;`, UTF‑8 with BOM, empty values, decimal commas, the fallback from pyarrow to the C
-engine on ragged rows, and every `ReadError` message. `tests/core/io/test_formats.py` covers choosing the format
+engine on ragged rows, and every `ReadError` message. `tests/core/io/test_sqlite_loader.py` covers tables, views, quoted names, BLOBs and every
+`ReadError` of the SQLite loader. `tests/core/io/test_parquet_loader.py` and
+`test_feather_loader.py` cover types, row groups, compression, Feather V1 and every
+`ReadError`; `test_arrow_table.py` covers each type conversion, the restored index and
+repeated column names. `tests/core/io/test_formats.py` covers choosing the format
 by extension, choosing the loader by the options, and that `ReadOptions` lists every format. `tests/core/io/test_sniffing.py` covers the detection: header, separator, encoding (including a character split between two chunks
 and a cp1252 byte at the end) and decimal mark. Column typing is tested in
 `tests/core/test_schema.py`, and the Load page in `tests/ui/test_pages_smoke.py` (including

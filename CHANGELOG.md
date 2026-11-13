@@ -5,6 +5,22 @@ Notable changes of LitMetrics, newest first. The format follows
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html) (before 1.0, a minor version may
 change behavior).
 
+## [Unreleased]
+
+### Added
+
+- **Parquet files** (`.parquet`, `.pq`) and **Feather files** (`.feather`, `.arrow`; Feather V1
+  and V2, compressed or not). Their columns keep the types stored in the file. Types the app
+  cannot profile are converted, and the Load page lists them: decimals and durations become
+  numbers, times become text, binary values are shown as their size and nested values (lists,
+  structs, maps) as JSON text.
+- **SQLite databases** (`.db`, `.sqlite`, `.sqlite3`): the Load page lists the tables and
+  views of the database and reads the one picked (the first one, by name, by default).
+  BLOB values are shown as their size.
+- Formats whose files hold several datasets declare them in `core/io/formats.py`
+  (`FileFormat.parts`); the Load page shows the selector without knowing the format, ready
+  for Excel sheets or other multi-dataset formats.
+
 ## [0.3.0] - 2026-11-11
 
 ### Added
