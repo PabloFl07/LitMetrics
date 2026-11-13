@@ -35,6 +35,7 @@ def load_page() -> None:
     )
     if uploaded is not None:
         _load(uploaded)
+    _part()
 
     # The dataset lives in the session state, so it stays after the file is removed from the
     # uploader or the user goes to another page.
@@ -52,29 +53,86 @@ def load_page() -> None:
 def _load(uploaded: UploadedFile) -> None:
     """Read ``uploaded`` and make it the active dataset. Show an error if it cannot be read.
 
-    Steps: skip if this upload was already processed, or show its error if it already failed;
-    guess how to read it, read it and convert its columns to their semantic types (cached by
-    content), and store it. The schema only replaces the current one when the content is new.
+    Steps: skip if this upload was already processed, or show its error if it already failed.
+    A file with several datasets is only listed and kept: ``_part`` reads them. Any other is
+    read here.
     """
     source_id = uploaded.file_id
     # Checked before ``getvalue``, which copies the whole file on every call.
-    if not state.source_changed(source_id):
+    if not state.source_changed(source_id) or _is_active_multipart(source_id):
         return
     if (error := state.get_read_error(source_id)) is not None:
         st.error(error)
         return
-    source = Source(uploaded.getvalue(), uploaded.name, source_id)
+    source = _source(uploaded)
     try:
-        options = formats.detect_options(source)
+        parts = formats.list_parts(source)
+    except ReadError as e:
+        state.set_read_error(source_id, str(e))
+        st.error(str(e))
+        return
+    if parts is not None:
+        state.set_multipart(source, parts)
+    elif _read(source, None, source_id):
+        # A file of one dataset replaces the file with several: its selector goes away.
+        state.clear_multipart()
+
+
+def _part() -> None:
+    """Draw the selector of the active file with several datasets, and read the chosen one.
+
+    The file and its datasets come from the session state, not from the uploader, so the
+    selector stays and keeps its choice after visiting another page (the uploader forgets
+    its file there). Each dataset of the file is a read of its own, processed once.
+    """
+    if (multipart := state.get_multipart()) is None:
+        return
+    source, parts = multipart
+    state.restore_part_widget()
+    part = st.selectbox(parts.label, parts.names, key=state.PART_WIDGET)
+    state.set_part(part)
+    read_id = f"{source.source_id}/{part}"
+    if not state.source_changed(read_id):
+        return
+    if (error := state.get_read_error(read_id)) is not None:
+        st.error(error)
+        return
+    _read(source, part, read_id)
+
+
+def _read(source: Source, part: str | None, read_id: str) -> bool:
+    """Read ``part`` of ``source`` (``None``: its only dataset) and make it the active dataset.
+
+    Guess how to read it, read it and convert its columns to their semantic types (cached by
+    content), and store it. The schema only replaces the current one when the content is new.
+    On a ``ReadError`` the message is shown and remembered for ``read_id``.
+
+    Returns:
+        Whether the dataset was read.
+    """
+    try:
+        options = formats.detect_options(source, part)
         dataset_id = compute_dataset_id(source.data, options)
         dataset, schema = cache.load_dataset(dataset_id, source, options)
     except ReadError as e:
         # Exceptions are not cached: without this, every rerun would read the file again.
-        state.set_read_error(source_id, str(e))
+        state.set_read_error(read_id, str(e))
         st.error(str(e))
-        return
-    if state.set_dataset(dataset, dataset_id, source_id):
+        return False
+    if state.set_dataset(dataset, dataset_id, read_id):
         state.set_schema(schema)
+    return True
+
+
+def _is_active_multipart(source_id: str) -> bool:
+    """Whether upload ``source_id`` is the file with several datasets already kept."""
+    multipart = state.get_multipart()
+    return multipart is not None and multipart[0].source_id == source_id
+
+
+def _source(uploaded: UploadedFile) -> Source:
+    """The upload as a ``Source``. Copies the whole file: call it only when it will be read."""
+    return Source(uploaded.getvalue(), uploaded.name, uploaded.file_id)
 
 
 # Components

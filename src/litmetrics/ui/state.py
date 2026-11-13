@@ -6,8 +6,13 @@ the rules about what is cleared when the dataset changes live in one place.
 State kept per browser session:
     dataset     The active ``LoadedDataset``, or None.
     dataset_id  Content hash of the active dataset (see ``compute_dataset_id``).
-    source_id   Id of the last upload that was processed, to skip it on later reruns.
-    read_error  Id of the last upload that could not be read, and its message.
+    source_id   Id of the last read that was processed (an upload, plus the part read for files
+                with several datasets), to skip it on later reruns.
+    read_error  Id of the last read that could not be done, and its message.
+    multipart   The active file with several datasets (``Source``, ``Parts``), or None. Its
+                bytes stay in the session so another dataset can be read after the uploader
+                forgot the file (it does when the user visits another page).
+    part        Dataset of that file picked by the user, to restore the selector.
     schema      Semantic types of the active dataset. Cleared when the dataset changes.
     skipped     Columns the user left out of the profile. Cleared when the dataset changes.
 """
@@ -17,7 +22,8 @@ from typing import Any
 
 import streamlit as st
 
-from litmetrics.core.io.base import LoadedDataset
+from litmetrics.core.io.base import LoadedDataset, Source
+from litmetrics.core.io.formats import Parts
 from litmetrics.core.schema import Schema
 
 # Keys
@@ -28,6 +34,13 @@ _SOURCE_ID = "source_id"
 _READ_ERROR = "read_error"
 _SCHEMA = "schema"
 _SKIPPED = "skipped_columns"
+
+_MULTIPART = "multipart"
+_PART = "part"
+
+# Key of the widget that picks the dataset of a file with several. It is not WIDGET_PREFIX:
+# picking another dataset resets those widgets, and must not reset itself.
+PART_WIDGET = "part_selector"
 
 # Widgets whose value depends on the columns of the dataset use this prefix,
 # so they are cleared when a new dataset is loaded.
@@ -53,6 +66,8 @@ def _defaults() -> dict[str, Any]:
         _DATASET_ID: None,
         _SOURCE_ID: None,
         _READ_ERROR: None,
+        _MULTIPART: None,
+        _PART: None,
         _SCHEMA: None,
         _SKIPPED: (),
     }
@@ -95,6 +110,48 @@ def get_read_error(source_id: str) -> str | None:
 def set_read_error(source_id: str, message: str) -> None:
     """Remember that upload ``source_id`` could not be read, so it is not read again."""
     st.session_state[_READ_ERROR] = (source_id, message)
+
+
+# File with several datasets (tables of a database): kept so its selector outlives the uploader
+
+
+def get_multipart() -> tuple[Source, Parts] | None:
+    """The active file with several datasets and its datasets, or None (``set_multipart``)."""
+    return st.session_state[_MULTIPART]
+
+
+def set_multipart(source: Source, parts: Parts) -> None:
+    """Keep ``source`` and its datasets, so another one can be read after leaving the page.
+
+    The uploader forgets its file when another page is shown; without the bytes kept here,
+    picking another table would need the file uploaded again. The previous choice of dataset
+    is forgotten: the new file starts from its first one. Call it before drawing the
+    selector (it clears the selector's widget state).
+    """
+    st.session_state[_MULTIPART] = (source, parts)
+    st.session_state[_PART] = None
+    st.session_state.pop(PART_WIDGET, None)
+
+
+def clear_multipart() -> None:
+    """Forget the file with several datasets, and its bytes (a single-dataset file replaced it)."""
+    st.session_state[_MULTIPART] = None
+    st.session_state[_PART] = None
+
+
+def set_part(name: str) -> None:
+    """Remember the dataset picked in the selector, to restore it after leaving the page."""
+    st.session_state[_PART] = name
+
+
+def restore_part_widget() -> None:
+    """Give the selector back the dataset picked before leaving the page.
+
+    A widget that is not drawn loses its state, so after visiting another page the selector
+    would show the first dataset and read it again. Call it before drawing the selector.
+    """
+    if PART_WIDGET not in st.session_state and st.session_state[_PART] is not None:
+        st.session_state[PART_WIDGET] = st.session_state[_PART]
 
 
 # Dataset: reading it (used by every page)
