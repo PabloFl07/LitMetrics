@@ -18,13 +18,21 @@ from collections.abc import Callable
 from dataclasses import dataclass
 from typing import Any
 
-from litmetrics.core.io import csv_loader, sniffing, sqlite_loader
+from litmetrics.core.io import (
+    csv_loader,
+    feather_loader,
+    parquet_loader,
+    sniffing,
+    sqlite_loader,
+)
 from litmetrics.core.io.base import LoadedDataset, Loader, ReadError, Source
+from litmetrics.core.io.feather_loader import FeatherOptions
+from litmetrics.core.io.parquet_loader import ParquetOptions
 from litmetrics.core.io.sniffing import CsvOptions
 from litmetrics.core.io.sqlite_loader import SqliteOptions
 
 # Read options of any supported format: the union of the ``options_type`` of every format.
-type ReadOptions = CsvOptions | SqliteOptions
+type ReadOptions = CsvOptions | SqliteOptions | ParquetOptions | FeatherOptions
 
 
 @dataclass(frozen=True)
@@ -95,6 +103,20 @@ FORMATS: tuple[FileFormat[Any], ...] = (
         sqlite_loader.detect_options,
         sqlite_loader.SqliteLoader(),
         PartsSpec(sqlite_loader.PART_LABEL, sqlite_loader.table_names, sqlite_loader.with_table),
+    ),
+    FileFormat(
+        parquet_loader.FORMAT_NAME,
+        (".parquet", ".pq"),
+        ParquetOptions,
+        parquet_loader.detect_options,
+        parquet_loader.ParquetLoader(),
+    ),
+    FileFormat(
+        feather_loader.FORMAT_NAME,
+        (".feather", ".arrow"),
+        FeatherOptions,
+        feather_loader.detect_options,
+        feather_loader.FeatherLoader(),
     ),
 )
 
