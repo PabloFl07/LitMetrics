@@ -22,7 +22,9 @@ state.get_read_error? ──yes──► st.error (the remembered message; nothi
   formats.list_parts(source) ──Parts──► state.set_multipart(source, parts)
               │ None (one dataset)               │  (every rerun, uploader or not)
               │                                  ▼
-              │                     selectbox (restored from state) ──► part
+              │       Load list / sidebar selector ──► state.choose_part
+              │                                  │
+              │          reading.read_chosen_part (app.py, every rerun)
               │                                  │
               │                     read_id = file_id + "/" + part, processed once
               ▼                                  │
@@ -147,15 +149,22 @@ is added.
 ### Files with several datasets
 
 A database has tables, a workbook has sheets: which one to read cannot be guessed from the
-bytes. Such a format sets `FileFormat.parts` to a `PartsSpec(label, names, select)`:
+bytes. Such a format sets `FileFormat.parts` to a `PartsSpec(label, describe, select)`:
 
 - `label`: what one dataset is called ("Table").
-- `names(source)`: lists them, raising `ReadError` when the file cannot be read.
+- `describe(source)`: lists them in order, each with a short description for the user (its
+  size), raising `ReadError` when the file cannot be read. SQLite's `describe_tables` gives
+  `"20,640 rows · 10 columns"` for a table and only the columns of a view (counting its rows
+  would run its query); a table it cannot read is described as `"cannot be read"` instead of
+  failing the list.
 - `select(options, name)`: the options that read the one called `name`.
 
-`list_parts(source)` returns `Parts(label, names)`, or `None` for single-dataset formats, and
-`detect_options(source, part)` applies `select`. The Load page draws a selectbox from `Parts`
-and never names the format, so a new multi-dataset format needs no change outside `core/io/`.
+`list_parts(source)` returns `Parts(label, names, descriptions)`, or `None` for
+single-dataset formats, and `detect_options(source, part)` applies `select`. The Load page
+lists `Parts` above the preview, in an expander titled `<label>: <active part>`, one row
+per part with its description and an Open button, drawn like the datasets in memory. The
+sidebar has a selectbox of them too (`name — description`), only while the active dataset is
+one of them. Neither names the format, so a new multi-dataset format needs no change outside `core/io/`.
 
 ## CSV detection (`core/io/sniffing.py`)
 
@@ -406,8 +415,7 @@ when the dataset changes live in one place.
 | `source_id` | Last read that was processed (`read_id`: upload, plus part) | Every processed read |
 | `read_error` | Last read (or listing of parts) that failed, and its message | Next failure |
 | `multipart` | Active file with several datasets: its `Source` (bytes kept) and `Parts` | New upload with parts; cleared when a single-dataset file is read |
-| `part` | Dataset of that file picked by the user | New upload with parts |
-| `part_selector` | Selectbox of the dataset (not `w_`: switching must not reset it) | Restored from `part` after visiting another page |
+| `part` | Dataset of that file picked by the user (`None`: the first one) | New upload with parts |
 | `schema` | `Schema` of the active dataset | New content |
 | `skipped_columns` | Columns the user left out of the profile (tuple) | New content |
 | `w_*` | Widgets that depend on the columns | New content |
@@ -431,9 +439,10 @@ Functions:
 - `get_multipart()`, `set_multipart(source, parts)`, `clear_multipart()`: the active file
   with several datasets. Its bytes stay in the session (memory: one copy of the file per
   session) because the uploader forgets its file when another page is shown, and another
-  table must still be readable. `set_part(name)` and `restore_part_widget()`: the chosen
-  dataset, given back to the selectbox (`PART_WIDGET`) after visiting another page, since a
-  widget that is not drawn loses its state.
+  table must still be readable. `get_part()` and `choose_part(name)`: the chosen
+  dataset, kept in the state (no widget, so it survives visiting another page).
+  `choose_part` also forgets `source_id`, so the dataset is read (a cache hit) even if it was
+  the last one read and the user switched to another since.
 - `widget_key(name)`: returns `"w_" + name`. Any widget whose options depend on the columns
   must use `key=state.widget_key(...)`, so a new dataset does not leave it pointing at columns
   that no longer exist.
@@ -447,9 +456,11 @@ Functions:
 2. If there is a file, `_load(uploaded)`:
    - shows the remembered error if listing its parts failed;
    - for formats with parts, lists them once per upload and keeps the file in the state
-     (`state.set_multipart`); `_part()` then draws the selectbox from the state on every
-     rerun, with or without the file in the uploader, and reads the chosen dataset with
-     `read_id = file_id + "/" + part`, so each table is one read, done once;
+     (`state.set_multipart`). `reading.read_chosen_part()` (`ui/reading.py`) reads the
+     chosen dataset with `read_id = file_id + "/" + part`, so each table is one read, done
+     once. It runs from app.py before every page, so a table picked in the sidebar is read
+     on any page, and from the Load page after an upload. `_parts()` draws the list from
+     the state, with or without the file in the uploader;
    - returns at once if its `file_id` was already processed, before reading its bytes
      (`getvalue()` copies the whole file on every call);
    - if reading it already failed, shows the remembered error and returns;

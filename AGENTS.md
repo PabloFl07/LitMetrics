@@ -47,7 +47,9 @@ src/litmetrics/
     state.py        The ONLY module that touches st.session_state
     cache.py        Cache wrappers around core functions (load_dataset, Profile sections) and
                     the dataset library (cached_datasets, forget_dataset, clear_all)
-    sidebar.py      Sidebar of every page (drawn by app.py after the page): dataset switcher
+    sidebar.py      Sidebar of every page (drawn by app.py after the page): dataset switcher and,
+                    for a table of a database, table switcher
+    reading.py      Reads a dataset into the session (Load page, and the table picked anywhere)
     charts.py       ECharts option builders: plain dicts, no streamlit, no streamlit_echarts
     echarts.py      The only module importing streamlit_echarts: ``echarts.show`` draws themed charts
     theme.py        Reads the theme (both modes): CSS variables --lm-* and chart colors

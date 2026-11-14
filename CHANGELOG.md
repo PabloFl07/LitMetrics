@@ -20,6 +20,26 @@ change behavior).
 - Formats whose files hold several datasets declare them in `core/io/formats.py`
   (`FileFormat.parts`); the Load page shows the selector without knowing the format, ready
   for Excel sheets or other multi-dataset formats.
+- **Datasets in memory**: the last datasets read (5) are kept, and the user can go back to
+  one without uploading its file again.
+  - A **sidebar**, shown on every page, has a selector of the active dataset among them.
+  - The Load page lists them (name, table of a database, format, size, when it was read)
+    with buttons to open or remove each one, and a **Clear cache** button that asks for
+    confirmation and removes every dataset and every Profile result.
+  - The cache is shared by every browser tab, so removing a dataset or clearing the cache
+    affects them all.
+- The tables of a SQLite database are listed above the preview, like the datasets in
+  memory: one row per table with its size (rows and columns; only the columns of a view) and
+  an Open button. The title of the list shows the open table, also while it is collapsed.
+- While a table of a database is the active dataset, the sidebar has a **Table** selector
+  below the dataset one, to switch table from any page.
+
+### Changed
+
+- The datasets read are kept in a library of their own (`core/io/library.py`) instead of a
+  `st.cache_resource` function cache, so they can be listed and removed. The least recently
+  used one is dropped first. Two tabs reading the same file at the same moment may now read
+  it twice.
 
 ## [0.3.0] - 2026-11-11
 
