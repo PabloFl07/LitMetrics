@@ -21,19 +21,21 @@ from typing import Any
 
 from litmetrics.core.io import (
     csv_loader,
+    excel_loader,
     feather_loader,
     parquet_loader,
     sniffing,
     sqlite_loader,
 )
 from litmetrics.core.io.base import LoadedDataset, Loader, ReadError, Source
+from litmetrics.core.io.excel_loader import ExcelOptions
 from litmetrics.core.io.feather_loader import FeatherOptions
 from litmetrics.core.io.parquet_loader import ParquetOptions
 from litmetrics.core.io.sniffing import CsvOptions
 from litmetrics.core.io.sqlite_loader import SqliteOptions
 
 # Read options of any supported format: the union of the ``options_type`` of every format.
-type ReadOptions = CsvOptions | SqliteOptions | ParquetOptions | FeatherOptions
+type ReadOptions = CsvOptions | SqliteOptions | ExcelOptions | ParquetOptions | FeatherOptions
 
 
 @dataclass(frozen=True)
@@ -110,6 +112,15 @@ FORMATS: tuple[FileFormat[Any], ...] = (
         PartsSpec(
             sqlite_loader.PART_LABEL, sqlite_loader.describe_tables, sqlite_loader.with_table
         ),
+    ),
+    FileFormat(
+        excel_loader.FORMAT_NAME,
+        # .ods (OpenDocument) is read by the same reader, so it is offered with them.
+        (".xlsx", ".xlsm", ".xlsb", ".xls", ".ods"),
+        ExcelOptions,
+        excel_loader.detect_options,
+        excel_loader.ExcelLoader(),
+        PartsSpec(excel_loader.PART_LABEL, excel_loader.describe_sheets, excel_loader.with_sheet),
     ),
     FileFormat(
         parquet_loader.FORMAT_NAME,

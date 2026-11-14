@@ -1,0 +1,176 @@
+"""Read one sheet of a spreadsheet workbook (Excel or OpenDocument) into a LoadedDataset.
+
+A workbook holds several sheets, so reading one needs a choice the bytes cannot make: which
+sheet. ``describe_sheets`` lists them for the user, ``ExcelOptions.sheet`` carries the choice
+and ``ExcelLoader`` reads it, like the tables of a SQLite database (``sqlite_loader.py``).
+
+Workbooks are read with calamine (``python-calamine``, pandas' ``"calamine"`` engine), a
+reader written in Rust that opens .xlsx, .xlsm, .xlsb, .xls and .ods alike, from the bytes
+of the upload. The first row of a sheet holds the column names.
+
+Cells keep the type Excel stored (numbers, dates, booleans). A column whose cells have
+different types (numbers and a few ``"N/A"``) is turned into text, as a CSV column would be,
+so the schema can find it is numeric and count the values that are not.
+"""
+
+import io
+from dataclasses import dataclass, replace
+
+import pandas as pd
+import python_calamine as calamine
+
+from litmetrics.core.io.base import LoadedDataset, ReadError, Source
+
+# Name of the format, shown to the user.
+FORMAT_NAME = "Excel"
+
+# What one of the datasets of a workbook is called, shown to the user.
+PART_LABEL = "Sheet"
+
+
+@dataclass(frozen=True)
+class ExcelOptions:
+    """How a workbook is read.
+
+    Attributes:
+        sheet: Sheet to read. ``None`` reads the first one listed by ``sheet_names``.
+    """
+
+    sheet: str | None = None
+
+
+def detect_options(data: bytes) -> ExcelOptions:
+    """Return the default options: the first sheet. Nothing about a workbook needs guessing.
+
+    Never raises: problems with the file are reported by ``describe_sheets`` and the loader.
+    """
+    return ExcelOptions()
+
+
+def with_sheet(options: ExcelOptions, sheet: str) -> ExcelOptions:
+    """Return ``options`` reading ``sheet`` instead."""
+    return replace(options, sheet=sheet)
+
+
+def sheet_names(source: Source) -> tuple[str, ...]:
+    """Return the sheets of the workbook in ``source`` that hold cells.
+
+    In workbook order, visible sheets first and hidden ones after them. Chart and macro
+    sheets are left out.
+
+    Raises:
+        ReadError: The file is empty, is not a workbook, is damaged, is protected with a
+            password, or has no sheets.
+    """
+    return tuple(name for name, _ in _sheets(_open(source), source.name))
+
+
+def describe_sheets(source: Source) -> dict[str, str]:
+    """Return each sheet of ``sheet_names``, in that order, with a short description.
+
+    The description is text for the user: its rows and columns (``"1,200 rows · 8 columns"``,
+    the first row being the column names), ``"empty"``, and ``"hidden"`` for hidden sheets.
+    Finding the size parses every sheet once, so this reads the whole workbook.
+
+    Raises:
+        ReadError: The same cases as ``sheet_names``.
+    """
+    workbook = _open(source)
+    return {
+        name: _describe(workbook, name, hidden) for name, hidden in _sheets(workbook, source.name)
+    }
+
+
+class ExcelLoader:
+    """``Loader`` for workbooks: reads one sheet."""
+
+    def load(self, source: Source, options: ExcelOptions) -> LoadedDataset:
+        """Read the sheet ``options.sheet`` of the workbook in ``source``.
+
+        Raises:
+            ReadError: The file is empty, is not a workbook, is damaged or is protected with
+                a password; it has no sheets; the sheet does not exist; or the sheet has no
+                data rows.
+        """
+        name = source.name
+        sheets = [sheet for sheet, _ in _sheets(_open(source), name)]
+        sheet = options.sheet if options.sheet is not None else sheets[0]
+        if sheet not in sheets:
+            raise ReadError(f"'{name}' has no sheet called '{sheet}'.")
+        try:
+            df = pd.read_excel(io.BytesIO(source.data), sheet_name=sheet, engine="calamine")
+        except (calamine.CalamineError, ValueError) as e:
+            raise ReadError(f"Sheet '{sheet}' of '{name}' cannot be read: {e}") from e
+        if df.empty:
+            raise ReadError(f"Sheet '{sheet}' of '{name}' has no data rows.")
+        df.columns = [str(column) for column in df.columns]
+        df, mixed = _mixed_to_text(df)
+        details = {PART_LABEL.lower(): sheet}
+        if mixed:
+            details["mixed columns"] = ", ".join(mixed) + " (read as text)"
+        return LoadedDataset(df, name, FORMAT_NAME, details)
+
+
+def _open(source: Source) -> calamine.CalamineWorkbook:
+    """Open the bytes of ``source`` as a workbook.
+
+    Raises:
+        ReadError: The file is empty, is not a workbook, is damaged or has a password.
+    """
+    name = source.name
+    if not source.data:
+        raise ReadError(f"'{name}' is empty.")
+    try:
+        return calamine.CalamineWorkbook.from_filelike(io.BytesIO(source.data))
+    except calamine.PasswordError as e:
+        raise ReadError(f"'{name}' is protected with a password.") from e
+    except calamine.CalamineError as e:
+        raise ReadError(f"'{name}' is not a spreadsheet or is damaged: {e}") from e
+
+
+def _sheets(workbook: calamine.CalamineWorkbook, name: str) -> list[tuple[str, bool]]:
+    """Sheets with cells as ``(name, hidden)``, visible first, each group in workbook order.
+
+    Raises:
+        ReadError: The workbook has no sheets with cells.
+    """
+    sheets = [
+        (meta.name, meta.visible != calamine.SheetVisibleEnum.Visible)
+        for meta in workbook.sheets_metadata
+        if meta.typ == calamine.SheetTypeEnum.WorkSheet
+    ]
+    if not sheets:
+        raise ReadError(f"'{name}' has no sheets.")
+    # sorted() is stable: the workbook order stays within each group.
+    return sorted(sheets, key=lambda sheet: sheet[1])
+
+
+def _describe(workbook: calamine.CalamineWorkbook, sheet: str, hidden: bool) -> str:
+    """Rows (without the header) and columns of ``sheet``, as text for the user."""
+    try:
+        cells = workbook.get_sheet_by_name(sheet)
+    except calamine.CalamineError:
+        return "cannot be read"
+    rows, columns = max(cells.height - 1, 0), cells.width
+    if rows == 0:
+        size = "empty"
+    else:
+        size = f"{rows:,} row{'' if rows == 1 else 's'} · {columns} column"
+        size += "" if columns == 1 else "s"
+    return f"hidden · {size}" if hidden else size
+
+
+def _mixed_to_text(df: pd.DataFrame) -> tuple[pd.DataFrame, tuple[str, ...]]:
+    """Turn the columns whose cells have several types into text.
+
+    Missing cells stay missing. Returns the new DataFrame and the names of those columns.
+    """
+    mixed = tuple(
+        column
+        for column in df.columns
+        # Only object columns can mix types: a column of one type gets that type's dtype.
+        if df[column].dtype == object and len(set(map(type, df[column].dropna()))) > 1
+    )
+    if not mixed:
+        return df, ()
+    return df.assign(**{c: df[c].astype("str").where(df[c].notna()) for c in mixed}), mixed
