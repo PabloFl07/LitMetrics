@@ -33,7 +33,7 @@ from litmetrics.config import LoadConfig
 from litmetrics.core.io import formats
 from litmetrics.core.io.base import LoadedDataset, ReadError, Source
 from litmetrics.core.io.library import LibraryEntry
-from litmetrics.ui import cache, reading, state, style, tables
+from litmetrics.ui import cache, reading, state, style, tables, text
 
 
 def load_page() -> None:
@@ -118,7 +118,8 @@ def _cached_datasets() -> None:
     # A fixed label: one that changes (a count) makes the expander close after a removal.
     with st.expander("Datasets in memory", icon=":material/history:"):
         st.caption(
-            f"{len(entries)} of {LoadConfig.cache_max_datasets} kept, most recent first. "
+            f"{len(entries)} of {LoadConfig.cache_max_datasets} kept, "
+            f"{text.format_bytes(cache.cached_bytes())} in all, most recent first. "
             "Open one to use it again without its file."
         )
         for entry in entries:
@@ -138,7 +139,7 @@ def _cached_row(entry: LibraryEntry, active: bool) -> None:
     dataset = entry.dataset
     caption = (
         f"{dataset.format} · {dataset.n_rows:,} rows · {dataset.n_cols} columns · "
-        f"read at {entry.loaded_at:%H:%M}"
+        f"{text.format_bytes(entry.memory_bytes)} · read at {entry.loaded_at:%H:%M}"
     )
     with _row(f"cached_{entry.dataset_id}", entry.label, caption, active):
         st.button(
@@ -164,11 +165,12 @@ def _row(key: str, title: str, caption: str, active: bool) -> Iterator[None]:
     """Row of a list of datasets: title, Active badge and caption; buttons go inside the block.
 
     Shared by the datasets of a file and the datasets in memory, so both lists look the same.
+    ``title`` is a name from the user's file, shown as written; ``caption`` is Markdown.
     """
     with st.container(horizontal=True, vertical_alignment="center", key=key):
         with st.container(gap=None):
             badge = " :green-badge[Active]" if active else ""
-            st.markdown(f"**{title}**{badge}")
+            st.markdown(f"**{text.md(title)}**{badge}")
             if caption:
                 st.caption(caption)
         yield
@@ -195,7 +197,8 @@ def _confirm_clear() -> None:
     """Ask before removing every dataset and result from memory."""
     st.markdown(
         "Every dataset in memory and every computed result is removed, also for other open "
-        "tabs. To use a dataset again you will have to upload its file."
+        "tabs, and the open database or workbook is closed. To use a dataset again you will "
+        "have to upload its file."
     )
     with st.container(horizontal=True, horizontal_alignment="right"):
         if st.button("Cancel", key="clear_cache_cancel"):
@@ -208,9 +211,13 @@ def _confirm_clear() -> None:
 
 
 def _clear_cache() -> None:
-    """Drop every dataset and result from memory; the session is left without a dataset."""
+    """Drop every dataset and result from memory, and close the open file with several.
+
+    The session is left without a dataset and without the bytes of that file.
+    """
     cache.clear_all()
     state.clear_dataset()
+    state.close_multipart()
 
 
 # Components
@@ -226,7 +233,10 @@ def _summary(dataset: LoadedDataset) -> None:
     file_format.metric("Format", dataset.format, icon=":material/description:", border=True)
     if dataset.details:
         # Written by the loader of each format: the page does not know what they mean.
-        details = ", ".join(f"{label} **{value}**" for label, value in dataset.details.items())
+        # Values hold names from the file (tables, columns): shown as written.
+        details = ", ".join(
+            f"{label} **{text.md(value)}**" for label, value in dataset.details.items()
+        )
         st.caption(f":material/tune: Read with {details}.")
 
 
@@ -249,9 +259,9 @@ def _parts() -> bool:
     active = reading.active_part()
     # The label names the active one, so it shows while collapsed. It changes with the
     # choice, which collapses the expander after picking a dataset.
-    label = f"{parts.label}: {active or reading.chosen_part(parts)}"
+    label = f"{parts.label}: {text.md(active or reading.chosen_part(parts))}"
     with st.expander(label, icon=":material/table_view:"):
-        st.caption(f"{len(parts.names)} in {source.name}. Open one to read it.")
+        st.caption(f"{len(parts.names)} in {text.md(source.name)}. Open one to read it.")
         for i, name in enumerate(parts.names):
             # Positions, not names, in keys: names may hold any character.
             with _row(f"part_{i}", name, parts.descriptions.get(name, ""), name == active):
@@ -263,6 +273,16 @@ def _parts() -> bool:
                     on_click=state.choose_part,
                     args=(name,),
                 )
+        # The file stays in the session so its other datasets can be read: closing it frees
+        # its bytes. The datasets already read stay in memory.
+        st.button(
+            "Close file",
+            icon=":material/close:",
+            key="close_file",
+            on_click=state.close_multipart,
+            help=f"Free the memory of {text.md(source.name)}. The {parts.label.lower()}s "
+            "already read stay in memory; to read another, upload the file again.",
+        )
     return True
 
 

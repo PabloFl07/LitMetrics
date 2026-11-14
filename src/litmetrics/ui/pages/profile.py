@@ -34,7 +34,7 @@ from litmetrics.core.profile import (
     top_correlated_pairs,
 )
 from litmetrics.core.schema import IDENTIFIER_MIN_DISTINCT, Schema, SemanticType, drop_columns
-from litmetrics.ui import cache, charts, echarts, state, style, tables, theme
+from litmetrics.ui import cache, charts, echarts, state, style, tables, text, theme
 
 _CFG = ProfileConfig
 
@@ -204,7 +204,7 @@ def _summary(active: _Active) -> None:
     columns = f"{dataset.n_cols} columns"
     if skipped := len(state.get_skipped_columns()):
         columns += f" ({skipped} skipped)"
-    st.caption(f"{dataset.name} · {dataset.n_rows:,} rows · {columns}")
+    st.caption(f"{text.md(dataset.name)} · {dataset.n_rows:,} rows · {columns}")
     # Keyed container: styles.css turns these metrics into cards.
     with st.container(key="headline"):
         missing, rows, duplicates, constant, memory = st.columns(5)
@@ -213,7 +213,7 @@ def _summary(active: _Active) -> None:
         (rows, "Rows with missing", f"{base.rows_with_missing:,}", "table_rows"),
         (duplicates, "Duplicate rows", f"{base.duplicate_rows:,}", "content_copy"),
         (constant, "Constant columns", base.constant_columns, "horizontal_rule"),
-        (memory, "Memory", _format_bytes(base.memory_bytes), "memory"),
+        (memory, "Memory", text.format_bytes(base.memory_bytes), "memory"),
     ):
         where.metric(label, value, icon=f":material/{icon}:", border=True)
 
@@ -268,8 +268,8 @@ def _issues() -> None:
             for kind in selected or kinds:
                 for issue in (i for i in issues if i.kind == kind):
                     where = " · ".join(f"`{c}`" for c in issue.columns)
-                    text = f"{where} — {issue.message}" if where else issue.message
-                    st.markdown(f"{_badge(kind)} {text}")
+                    line = f"{where} — {issue.message}" if where else issue.message
+                    st.markdown(f"{_badge(kind)} {line}")
     _about(_issues_help())
 
 
@@ -1013,10 +1013,10 @@ def _active() -> _Active:
     )
 
 
-def _about(text: str) -> None:
+def _about(body: str) -> None:
     """Collapsible explanation of a tab, for users new to data profiling."""
     with st.expander("About this tab", icon=":material/help:"):
-        st.markdown(text)
+        st.markdown(body)
 
 
 def _sample_note(dataset: LoadedDataset, what: str) -> None:
@@ -1087,13 +1087,3 @@ def _badge(kind: IssueKind) -> str:
     """Markdown for the colored badge of an issue kind."""
     label, color, icon = _ISSUE_STYLE[kind]
     return f":{color}-badge[:material/{icon}: {label}]"
-
-
-def _format_bytes(n: int) -> str:
-    """Size in the largest unit that keeps it above 1: "512 B", "1.5 MB"."""
-    size = float(n)
-    for unit in ("B", "KB", "MB"):
-        if size < 1024:
-            return f"{size:.0f} {unit}" if unit == "B" else f"{size:.1f} {unit}"
-        size /= 1024
-    return f"{size:.1f} GB"
