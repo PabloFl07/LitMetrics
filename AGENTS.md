@@ -50,6 +50,7 @@ src/litmetrics/
                     the dataset library (cached_datasets, forget_dataset, clear_all)
     sidebar.py      Sidebar of every page (drawn by app.py after the page): dataset switcher and,
                     for a table of a database, table switcher
+    text.py         Text for the user: ``md`` escapes names drawn as Markdown, ``format_bytes``
     reading.py      Reads a dataset into the session (Load page, and the table picked anywhere)
     charts.py       ECharts option builders: plain dicts, no streamlit, no streamlit_echarts
     echarts.py      The only module importing streamlit_echarts: ``echarts.show`` draws themed charts

@@ -328,14 +328,23 @@ several times faster than openpyxl. The format is shown as "Excel", also for `.o
   hidden ones after them, each group in workbook order. So the first sheet read by default is
   the first visible one.
 - `describe_sheets` gives each its rows (without the header row) and columns,
-  `"empty"`, and `"hidden · "` before hidden ones. It parses every sheet to find its size, so
-  listing the sheets reads the whole workbook once, at upload.
+  `"empty"`, and `"hidden · "` before hidden ones. It parses every sheet to find its size
+  (about 0.7 s for 1.5 M cells, roughly 8 MB of .xlsx), so for workbooks over
+  `_SIZES_MAX_BYTES` (10 MB) the size is left out and only `"hidden"` is said.
+- The workbook is opened once per call (`pd.ExcelFile` with the calamine engine): its
+  `.book` gives the sheets and their metadata, and `pd.read_excel` reads the sheet from it.
 - The first row holds the column names; names become strings (`2024` → `"2024"`).
 - Cells keep the type stored (numbers, dates, booleans). pandas turns its usual missing
-  markers (`"N/A"`, `"NA"`, `""`...) into missing values, as for a CSV. A column whose cells
-  still have several types (numbers and `"unknown"`) is turned into text, missing cells kept,
-  so the schema finds it numeric and counts the rest as unparsed; `details` lists those
-  columns ("mixed columns"), next to "sheet".
+  markers (`"N/A"`, `"NA"`, `""`...) into missing values, as for a CSV. Two kinds of columns
+  are turned into text, missing cells kept, and listed in `details` next to "sheet":
+  - times of day ("time columns", `"09:30:00"`), which pandas keeps as `datetime.time`
+    objects: the schema would take them for dates and lose every value. Parquet and Feather
+    times become text the same way;
+  - columns whose cells still have several types ("mixed columns": numbers and
+    `"unknown"`), so the schema finds them numeric and counts the rest as unparsed.
+- Text that is only a time of day (`"09:30"`, `"17:05:10"`, `"9:30 PM"`) is never taken for
+  a date by the schema (`schema._TIME_OF_DAY`), whatever the format: pandas would read it as
+  today at that time.
 
 | Situation | Message to the user |
 |---|---|
@@ -392,11 +401,20 @@ file only read it once. Rules R-C1 to R-C6 in `docs/performance.md` explain the 
   copy. That is safe because nothing modifies it (`core/` is pure). It keeps at most
   `LoadConfig.cache_max_datasets` (5) datasets, least recently used dropped first. Unlike a
   function cache, the library can be listed and emptied: `cached_datasets()`,
-  `cached_dataset(id)`, `forget_dataset(id)` and `clear_all()` (which also empties the
-  `st.cache_data` of the Profile). The Load page lists them to open one again, remove one or
+  `cached_dataset(id)`, `cached_bytes()`, `forget_dataset(id)` and `clear_all()` (which also
+  empties the `st.cache_data` of the Profile). Each `LibraryEntry` measures the memory of its
+  DataFrame once, when it is created (`memory_bytes`, `memory_usage(deep=True)`): the list
+  shows it per dataset and in all. The Load page lists them to open one again, remove one or
   clear the cache; the sidebar (`ui/sidebar.py`) switches between them from any page. Both use
   `state.switch_dataset`, which keeps `source_id` so the file still in the uploader is not read
   again and does not replace the chosen dataset.
+- The bytes of an open database or workbook stay in the session (`multipart`) so its other
+  tables can be read. **Close file** in its list, and **Clear cache**, free them with
+  `state.close_multipart`, which marks its upload as processed: a file still in the uploader
+  is not opened again. The datasets already read from it stay in memory.
+- Names from the user's files (file, table, sheet, column names) drawn as Markdown go through
+  `ui/text.md`, which escapes what Markdown or Streamlit would read (`*draft*`, `$5$`,
+  `:red[x]`).
 - The Profile wrappers use `@st.cache_data` and return aggregates, whose size grows with the
   number of columns, not of rows. They keep `ProfileConfig.cache_max_datasets` (3) datasets
   each (`column_detail`: `ProfileConfig.cache_max_columns`).
@@ -447,9 +465,10 @@ when the dataset changes live in one place.
 | `dataset` | Active `LoadedDataset` or `None` | New content; switching to a kept dataset; `None` when removed from memory |
 | `dataset_id` | Content hash of the active dataset | Same as `dataset` |
 | `source_id` | Last read that was processed (`read_id`: upload, plus part) | Every processed read |
-| `read_error` | Last read (or listing of parts) that failed, and its message | Next failure |
+| `read_error` | Reads (or listings of parts) that failed: read id -> message, one per read | Never: each read is tried once |
 | `multipart` | Active file with several datasets: its `Source` (bytes kept) and `Parts` | New upload with parts; cleared when a single-dataset file is read |
 | `part` | Dataset of that file picked by the user (`None`: the first one) | New upload with parts |
+| `part_ids` | Datasets of that file read in this session: dataset id -> part | New upload with parts |
 | `schema` | `Schema` of the active dataset | New content |
 | `skipped_columns` | Columns the user left out of the profile (tuple) | New content |
 | `w_*` | Widgets that depend on the columns | New content |
@@ -468,15 +487,20 @@ Functions:
 - `require_dataset()`, `require_dataset_id()`, `require_schema()`: the same, but raise
   `RuntimeError` when nothing is loaded. For code that only runs with a dataset.
 - `get_skipped_columns()`, `set_skipped_columns(names)`: columns left out of the profile.
-- `get_read_error(source_id)`, `set_read_error(source_id, message)`: the error of an upload
-  that could not be read, so later reruns show it without reading the file again.
+- `get_read_error(source_id)`, `set_read_error(source_id, message)`: the error of a read
+  that could not be done, so later reruns show it without reading the file again. One per
+  read: with a single slot, two failed reads (a broken upload and an empty table) would
+  overwrite each other and both be read again on every rerun.
 - `get_multipart()`, `set_multipart(source, parts)`, `clear_multipart()`: the active file
   with several datasets. Its bytes stay in the session (memory: one copy of the file per
   session) because the uploader forgets its file when another page is shown, and another
   table must still be readable. `get_part()` and `choose_part(name)`: the chosen
   dataset, kept in the state (no widget, so it survives visiting another page).
   `choose_part` also forgets `source_id`, so the dataset is read (a cache hit) even if it was
-  the last one read and the user switched to another since.
+  the last one read and the user switched to another since. `set_part_id(name, dataset_id)`
+  and `part_of(dataset_id)`: which part each dataset read from the file is, so the lists know
+  the active table. Kept per file, not looked up by file name: an older version of a file of
+  the same name, opened from memory, is not taken for a table of the new one.
 - `widget_key(name)`: returns `"w_" + name`. Any widget whose options depend on the columns
   must use `key=state.widget_key(...)`, so a new dataset does not leave it pointing at columns
   that no longer exist.

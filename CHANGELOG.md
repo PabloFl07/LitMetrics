@@ -19,7 +19,10 @@ change behavior).
   BLOB values are shown as their size.
 - **Excel workbooks** (`.xlsx`, `.xlsm`, `.xlsb`, `.xls`) and OpenDocument spreadsheets
   (`.ods`), read with calamine. Sheets are picked like the tables of a database (list in the
-  Load page, selector in the sidebar), each with its size; hidden sheets are listed last.
+  Load page, selector in the sidebar), each with its size (left out above 10 MB, where
+  finding it would take seconds); hidden sheets are listed last.
+- **Close file** in the list of tables or sheets frees the open database or workbook; the
+  datasets already read from it stay in memory. **Clear cache** closes it too.
   Cells keep their type (numbers, dates, booleans), and columns that mix numbers and text are
   read as text so the schema can still find them numeric. New dependency: `python-calamine`.
 - Formats whose files hold several datasets declare them in `core/io/formats.py`
@@ -28,6 +31,7 @@ change behavior).
 - **Datasets in memory**: the last datasets read (5) are kept, and the user can go back to
   one without uploading its file again.
   - A **sidebar**, shown on every page, has a selector of the active dataset among them.
+  - Each shows the memory it takes, and the list the total.
   - The Load page lists them (name, table of a database, format, size, when it was read)
     with buttons to open or remove each one, and a **Clear cache** button that asks for
     confirmation and removes every dataset and every Profile result.
@@ -45,6 +49,19 @@ change behavior).
   `st.cache_resource` function cache, so they can be listed and removed. The least recently
   used one is dropped first. Two tabs reading the same file at the same moment may now read
   it twice.
+
+### Fixed
+
+- Time-of-day columns (`09:30`, `17:05:10`) were taken for dates: Excel time cells lost
+  every value, and text times in CSV, Parquet and Feather files were dated today. They are
+  now text.
+- After uploading a new version of a database or workbook with the same name and opening the
+  older one from memory, the list of tables marked a table of the new file as active and did
+  not let it be opened.
+- File, table, sheet and column names with Markdown characters (`*draft*`, `$5$`,
+  `:red[x]`) were drawn as italics, formulas or colors; they now show as written.
+- With two failed reads at once (an empty sheet and a broken upload), both files were read
+  again on every interaction. Each failed read is now remembered on its own.
 
 ## [0.3.0] - 2026-11-11
 
