@@ -65,7 +65,8 @@ tests/core/       pytest, mirrors src/litmetrics/core
 tests/ui/         AppTest smoke tests of the pages and tests of ui/charts.py
 scripts/          bench_profile.py: benchmark of Load and Profile
 docs/             Reference docs: data-loading.md (Load flow), performance.md (rules R-*),
-                  styling.md (themes, variants, CSS selectors)
+                  styling.md (themes, variants, CSS selectors), state-and-cache.md (cache,
+                  session state, what survives a reload)
 drafts/           Design notes and plans (Spanish). Intent, not truth: the code wins
 ```
 
