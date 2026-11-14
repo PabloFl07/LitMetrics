@@ -17,6 +17,11 @@ change behavior).
 - **SQLite databases** (`.db`, `.sqlite`, `.sqlite3`): the Load page lists the tables and
   views of the database and reads the one picked (the first one, by name, by default).
   BLOB values are shown as their size.
+- **Excel workbooks** (`.xlsx`, `.xlsm`, `.xlsb`, `.xls`) and OpenDocument spreadsheets
+  (`.ods`), read with calamine. Sheets are picked like the tables of a database (list in the
+  Load page, selector in the sidebar), each with its size; hidden sheets are listed last.
+  Cells keep their type (numbers, dates, booleans), and columns that mix numbers and text are
+  read as text so the schema can still find them numeric. New dependency: `python-calamine`.
 - Formats whose files hold several datasets declare them in `core/io/formats.py`
   (`FileFormat.parts`); the Load page shows the selector without knowing the format, ready
   for Excel sheets or other multi-dataset formats.

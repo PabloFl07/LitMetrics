@@ -53,6 +53,7 @@ state.get_read_error? ──yes──► st.error (the remembered message; nothi
 | `core/io/sniffing.py` | Guesses `CsvOptions` (encoding, separator, header, decimal mark) from the bytes |
 | `core/io/csv_loader.py` | `CsvLoader`: turns a `Source` + `CsvOptions` into a `LoadedDataset` |
 | `core/io/sqlite_loader.py` | `SqliteLoader` and `table_names`: one table or view of a SQLite database |
+| `core/io/excel_loader.py` | `ExcelLoader` and `describe_sheets`: one sheet of an Excel or OpenDocument workbook |
 | `core/io/parquet_loader.py` | `ParquetLoader`: a Parquet file |
 | `core/io/feather_loader.py` | `FeatherLoader`: a Feather (V1, V2) or Arrow IPC file |
 | `core/io/arrow_table.py` | `to_frame`: Arrow table of a columnar file → DataFrame, converting the types the app cannot use |
@@ -125,9 +126,10 @@ whether the state that depends on the data must be reset.
 
 The only module that knows which formats exist. `FORMATS` holds one `FileFormat` per format:
 `name` (shown to the user), `extensions` (lowercase, with the dot), `options_type` (its frozen
-options class), `detect_options(bytes)` and `loader`. Today it has four entries: CSV (`.csv`,
+options class), `detect_options(bytes)` and `loader`. Today it has five entries: CSV (`.csv`,
 `CsvOptions`, `sniffing.detect_options`, `CsvLoader`), SQLite (`.db`, `.sqlite`,
-`.sqlite3`, `SqliteOptions`, `SqliteLoader`, with parts), Parquet (`.parquet`, `.pq`,
+`.sqlite3`, `SqliteOptions`, `SqliteLoader`, with parts), Excel (`.xlsx`, `.xlsm`, `.xlsb`,
+`.xls`, `.ods`, `ExcelOptions`, `ExcelLoader`, with parts), Parquet (`.parquet`, `.pq`,
 `ParquetOptions`, `ParquetLoader`) and Feather (`.feather`, `.arrow`, `FeatherOptions`,
 `FeatherLoader`). `ReadOptions` is the union of the
 options classes of every format: the type of the options outside `core/io/`.
@@ -312,6 +314,38 @@ that had them are listed in `details` ("binary columns"), next to "table".
 | Table not in the file | `'x.db' has no table called 't'.` |
 | Query fails | `Table 't' of 'x.db' cannot be read: <detail>` |
 | Table without rows | `Table 't' of 'x.db' has no data rows.` |
+
+## Reading an Excel workbook (`core/io/excel_loader.py`)
+
+`ExcelOptions(sheet)`: the sheet to read; `None` reads the first one listed.
+`detect_options` has nothing to guess and returns `ExcelOptions()`.
+
+Workbooks are read with calamine (`python-calamine`, pandas' `engine="calamine"`), a Rust
+reader that opens `.xlsx`, `.xlsm`, `.xlsb`, `.xls` and OpenDocument `.ods` from the bytes,
+several times faster than openpyxl. The format is shown as "Excel", also for `.ods`.
+
+- Sheets: only worksheets (chart and macro sheets are left out), visible ones first and
+  hidden ones after them, each group in workbook order. So the first sheet read by default is
+  the first visible one.
+- `describe_sheets` gives each its rows (without the header row) and columns,
+  `"empty"`, and `"hidden · "` before hidden ones. It parses every sheet to find its size, so
+  listing the sheets reads the whole workbook once, at upload.
+- The first row holds the column names; names become strings (`2024` → `"2024"`).
+- Cells keep the type stored (numbers, dates, booleans). pandas turns its usual missing
+  markers (`"N/A"`, `"NA"`, `""`...) into missing values, as for a CSV. A column whose cells
+  still have several types (numbers and `"unknown"`) is turned into text, missing cells kept,
+  so the schema finds it numeric and counts the rest as unparsed; `details` lists those
+  columns ("mixed columns"), next to "sheet".
+
+| Situation | Message to the user |
+|---|---|
+| Empty file | `'x.xlsx' is empty.` |
+| Another format renamed, or damaged | `'x.xlsx' is not a spreadsheet or is damaged: <calamine detail>` |
+| Encrypted workbook | `'x.xlsx' is protected with a password.` |
+| No worksheets | `'x.xlsx' has no sheets.` |
+| Sheet not in the file | `'x.xlsx' has no sheet called 's'.` |
+| Sheet cannot be parsed | `Sheet 's' of 'x.xlsx' cannot be read: <detail>` |
+| Empty sheet, or only a header row | `Sheet 's' of 'x.xlsx' has no data rows.` |
 
 ## Reading Parquet and Feather files (`core/io/parquet_loader.py`, `feather_loader.py`)
 
@@ -508,7 +542,9 @@ See the `add-loader` skill for the full checklist. In short:
 `tests/core/io/test_csv_loader.py` covers `CsvLoader`: dtypes, files without a header, cp1252
 with `;`, UTF‑8 with BOM, empty values, decimal commas, the fallback from pyarrow to the C
 engine on ragged rows, and every `ReadError` message. `tests/core/io/test_sqlite_loader.py` covers tables, views, quoted names, BLOBs and every
-`ReadError` of the SQLite loader. `tests/core/io/test_parquet_loader.py` and
+`ReadError` of the SQLite loader. `tests/core/io/test_excel_loader.py` covers sheet order,
+hidden and empty sheets, types, mixed columns and every `ReadError`; its workbooks are built
+in memory by `tests/xlsx_builder.py` (no Excel writer library needed). `tests/core/io/test_parquet_loader.py` and
 `test_feather_loader.py` cover types, row groups, compression, Feather V1 and every
 `ReadError`; `test_arrow_table.py` covers each type conversion, the restored index and
 repeated column names. `tests/core/io/test_formats.py` covers choosing the format

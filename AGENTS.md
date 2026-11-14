@@ -3,7 +3,7 @@
 Streamlit app to explore a dataset: load a CSV, check its quality, plot it with ECharts and run
 statistics. Flow of the user: Load → Profile → Visualization → Statistics.
 
-Status: Load (CSV, SQLite, Parquet, Feather) and Profile work. Home and Visualization are
+Status: Load (CSV, SQLite, Excel, Parquet, Feather) and Profile work. Home and Visualization are
 stubs. Statistics has no page yet.
 
 ## Commands
@@ -35,6 +35,7 @@ src/litmetrics/
     io/sniffing.py  Detects separator, encoding, header and decimal mark of a CSV -> CsvOptions
     io/csv_loader.py
     io/sqlite_loader.py  One table or view of a SQLite database -> SqliteOptions(table)
+    io/excel_loader.py   One sheet of an Excel / OpenDocument workbook (calamine) -> ExcelOptions(sheet)
     io/library.py   DatasetLibrary: datasets kept in memory (LRU), listable and removable
     io/parquet_loader.py, io/feather_loader.py  Parquet / Feather (Arrow IPC) files, no options
     io/arrow_table.py    Arrow table -> DataFrame, shared by Parquet and Feather
