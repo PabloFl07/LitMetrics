@@ -12,6 +12,10 @@ active dataset. It stays there after the file is removed from the uploader or th
 another page. The page shows a summary (rows, columns, format, how the file was read) and a
 preview of the first rows. The profile of each column is in the Profile page.
 
+Every dataset read is kept in memory (``cache.cached_datasets``, shared by all sessions). The
+page lists them, to open one again without its file, remove one, or clear the whole cache;
+the sidebar (``ui/sidebar.py``) only switches between them, from any page.
+
 If a file cannot be read, the error is shown and the previous dataset, if any, stays active.
 The error is remembered for that upload, so later reruns show it without reading the file
 again.
@@ -23,6 +27,7 @@ from streamlit.typing import UploadedFile
 from litmetrics.config import LoadConfig
 from litmetrics.core.io import formats
 from litmetrics.core.io.base import LoadedDataset, ReadError, Source, compute_dataset_id
+from litmetrics.core.io.library import LibraryEntry
 from litmetrics.ui import cache, state, style, tables
 
 
@@ -36,6 +41,7 @@ def load_page() -> None:
     if uploaded is not None:
         _load(uploaded)
     _part()
+    _cached_datasets()
 
     # The dataset lives in the session state, so it stays after the file is removed from the
     # uploader or the user goes to another page.
@@ -113,7 +119,7 @@ def _read(source: Source, part: str | None, read_id: str) -> bool:
     try:
         options = formats.detect_options(source, part)
         dataset_id = compute_dataset_id(source.data, options)
-        dataset, schema = cache.load_dataset(dataset_id, source, options)
+        dataset, schema = cache.load_dataset(dataset_id, source, options, part)
     except ReadError as e:
         # Exceptions are not cached: without this, every rerun would read the file again.
         state.set_read_error(read_id, str(e))
@@ -133,6 +139,103 @@ def _is_active_multipart(source_id: str) -> bool:
 def _source(uploaded: UploadedFile) -> Source:
     """The upload as a ``Source``. Copies the whole file: call it only when it will be read."""
     return Source(uploaded.getvalue(), uploaded.name, uploaded.file_id)
+
+
+# Datasets kept in memory
+
+
+def _cached_datasets() -> None:
+    """List the datasets kept in memory, with buttons to open or remove each one."""
+    entries = cache.cached_datasets()
+    if not entries:
+        return
+    active_id = state.get_dataset_id()
+    # A fixed label: one that changes (a count) makes the expander close after a removal.
+    with st.expander("Datasets in memory", icon=":material/history:"):
+        st.caption(
+            f"{len(entries)} of {LoadConfig.cache_max_datasets} kept, most recent first. "
+            "Open one to use it again without its file."
+        )
+        for entry in entries:
+            _cached_row(entry, entry.dataset_id == active_id)
+        # Opened from the script, not from ``on_click``: a dialog needs the rerun to draw it.
+        if st.button(
+            "Clear cache",
+            icon=":material/delete_sweep:",
+            key="clear_cache",
+            help="Remove every dataset and every computed result from memory.",
+        ):
+            _confirm_clear()
+
+
+def _cached_row(entry: LibraryEntry, active: bool) -> None:
+    """One dataset kept in memory: name, size, when it was read, and its buttons."""
+    dataset = entry.dataset
+    with st.container(
+        horizontal=True, vertical_alignment="center", key=f"cached_{entry.dataset_id}"
+    ):
+        with st.container(gap=None):
+            badge = " :green-badge[Active]" if active else ""
+            st.markdown(f"**{entry.label}**{badge}")
+            st.caption(
+                f"{dataset.format} · {dataset.n_rows:,} rows · {dataset.n_cols} columns · "
+                f"read at {entry.loaded_at:%H:%M}"
+            )
+        st.button(
+            "Open",
+            icon=":material/open_in_new:",
+            key=f"open_{entry.dataset_id}",
+            disabled=active,
+            on_click=_open_cached,
+            args=(entry.dataset_id,),
+        )
+        st.button(
+            "Remove",
+            icon=":material/delete:",
+            type="tertiary",
+            key=f"remove_{entry.dataset_id}",
+            on_click=_remove_cached,
+            args=(entry.dataset_id,),
+        )
+
+
+def _open_cached(dataset_id: str) -> None:
+    """Make a dataset kept in memory the active one (callback of its Open button)."""
+    entry = cache.cached_dataset(dataset_id)
+    if entry is None:
+        st.toast("That dataset is no longer in memory. Upload the file again.")
+        return
+    state.switch_dataset(entry.dataset, entry.dataset_id, entry.schema)
+
+
+def _remove_cached(dataset_id: str) -> None:
+    """Drop a dataset from memory; if it is the active one, the session is left without one."""
+    cache.forget_dataset(dataset_id)
+    if state.get_dataset_id() == dataset_id:
+        state.clear_dataset()
+
+
+@st.dialog("Clear cache", icon=":material/delete_sweep:")
+def _confirm_clear() -> None:
+    """Ask before removing every dataset and result from memory."""
+    st.markdown(
+        "Every dataset in memory and every computed result is removed, also for other open "
+        "tabs. To use a dataset again you will have to upload its file."
+    )
+    with st.container(horizontal=True, horizontal_alignment="right"):
+        if st.button("Cancel", key="clear_cache_cancel"):
+            st.rerun()
+        # Cleared in the callback, which runs on any rerun; ``st.rerun`` only closes the dialog.
+        if st.button(
+            "Clear cache", type="primary", key="clear_cache_confirm", on_click=_clear_cache
+        ):
+            st.rerun()
+
+
+def _clear_cache() -> None:
+    """Drop every dataset and result from memory; the session is left without a dataset."""
+    cache.clear_all()
+    state.clear_dataset()
 
 
 # Components
