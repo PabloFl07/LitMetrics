@@ -3,7 +3,7 @@
 import streamlit as st
 
 from litmetrics.config import PageConfig
-from litmetrics.ui import sidebar, state, style
+from litmetrics.ui import reading, sidebar, state, style
 from litmetrics.ui.pages.home import home_page
 from litmetrics.ui.pages.load import load_page
 from litmetrics.ui.pages.profile import profile_page
@@ -35,6 +35,8 @@ def main() -> None:
 
     nav = st.navigation(pages=build_pages(), position="top")
 
+    # Before the page: a table picked in the sidebar is the active dataset of this rerun.
+    reading.read_chosen_part()
     nav.run()
     # After the page: a file read there is already listed in the sidebar in this same rerun.
     sidebar.draw()

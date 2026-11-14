@@ -12,7 +12,7 @@ State kept per browser session:
     multipart   The active file with several datasets (``Source``, ``Parts``), or None. Its
                 bytes stay in the session so another dataset can be read after the uploader
                 forgot the file (it does when the user visits another page).
-    part        Dataset of that file picked by the user, to restore the selector.
+    part        Dataset of that file picked by the user (None: the first one).
     schema      Semantic types of the active dataset. Cleared when the dataset changes.
     skipped     Columns the user left out of the profile. Cleared when the dataset changes.
 
@@ -41,13 +41,13 @@ _SKIPPED = "skipped_columns"
 _MULTIPART = "multipart"
 _PART = "part"
 
-# Key of the widget that picks the dataset of a file with several. It is not WIDGET_PREFIX:
-# picking another dataset resets those widgets, and must not reset itself.
-PART_WIDGET = "part_selector"
-
 # Key of the sidebar selector of the active dataset. Not WIDGET_PREFIX: it lists datasets, not
 # columns, and is set to the active dataset before every draw (``sync_switcher``).
 SWITCHER_WIDGET = "dataset_switcher"
+
+# Key of the sidebar selector of the dataset of a file with several (a table). Like
+# SWITCHER_WIDGET, set to the active one before every draw (``sync_part_switcher``).
+PART_SWITCHER_WIDGET = "part_switcher"
 
 # Widgets whose value depends on the columns of the dataset use this prefix,
 # so they are cleared when a new dataset is loaded.
@@ -157,12 +157,10 @@ def set_multipart(source: Source, parts: Parts) -> None:
 
     The uploader forgets its file when another page is shown; without the bytes kept here,
     picking another table would need the file uploaded again. The previous choice of dataset
-    is forgotten: the new file starts from its first one. Call it before drawing the
-    selector (it clears the selector's widget state).
+    is forgotten: the new file starts from its first one.
     """
     st.session_state[_MULTIPART] = (source, parts)
     st.session_state[_PART] = None
-    st.session_state.pop(PART_WIDGET, None)
 
 
 def clear_multipart() -> None:
@@ -171,19 +169,20 @@ def clear_multipart() -> None:
     st.session_state[_PART] = None
 
 
-def set_part(name: str) -> None:
-    """Remember the dataset picked in the selector, to restore it after leaving the page."""
-    st.session_state[_PART] = name
+def get_part() -> str | None:
+    """Dataset of the active file with several picked by the user, or None (the first one)."""
+    return st.session_state[_PART]
 
 
-def restore_part_widget() -> None:
-    """Give the selector back the dataset picked before leaving the page.
+def choose_part(name: str) -> None:
+    """Pick dataset ``name`` of the active file with several, to read it on the next rerun.
 
-    A widget that is not drawn loses its state, so after visiting another page the selector
-    would show the first dataset and read it again. Call it before drawing the selector.
+    The last read is forgotten, so the dataset is read even if it was the last one read (the
+    user may have switched to another dataset since): the read is a cache hit. The upload
+    itself is not read again: it is recognized as the file already kept.
     """
-    if PART_WIDGET not in st.session_state and st.session_state[_PART] is not None:
-        st.session_state[PART_WIDGET] = st.session_state[_PART]
+    st.session_state[_PART] = name
+    st.session_state[_SOURCE_ID] = None
 
 
 # Dataset: reading it (used by every page)
@@ -280,6 +279,14 @@ def sync_switcher() -> None:
     showing the one picked before.
     """
     st.session_state[SWITCHER_WIDGET] = st.session_state[_DATASET_ID]
+
+
+def sync_part_switcher(part: str) -> None:
+    """Point the sidebar selector of tables at ``part``, the active one. Call it before drawing.
+
+    The active table also changes from the Load page and from the datasets in memory.
+    """
+    st.session_state[PART_SWITCHER_WIDGET] = part
 
 
 # Internal helpers

@@ -1,8 +1,8 @@
 """Read one table (or view) of a SQLite database into a LoadedDataset.
 
 A database holds several tables, so reading one needs a choice the bytes cannot make: which
-table. ``table_names`` lists them for the user, ``SqliteOptions.table`` carries the choice and
-``SqliteLoader`` reads it.
+table. ``table_names`` lists them for the user (``describe_tables`` with their size),
+``SqliteOptions.table`` carries the choice and ``SqliteLoader`` reads it.
 
 The app only has the bytes of the upload, never a path. ``sqlite3`` opens them without a
 temporary file through ``Connection.deserialize``, which copies the bytes into an in-memory
@@ -66,7 +66,25 @@ def table_names(source: Source) -> tuple[str, ...]:
         ReadError: The file is empty, is not a SQLite database, is damaged or has no tables.
     """
     with _open(source) as connection:
-        return _tables(connection, source.name)
+        return tuple(table for table, _ in _tables(connection, source.name))
+
+
+def describe_tables(source: Source) -> dict[str, str]:
+    """Return each table and view of the database in ``source``, with a short description.
+
+    Sorted by name, like ``table_names``. The description is text for the user: the number
+    of rows and columns of a table (``"20,640 rows · 10 columns"``); only the columns of a
+    view, whose rows would mean running its query. A table that cannot be read is described
+    as such instead of failing the whole list: reading it gives the error.
+
+    Raises:
+        ReadError: The file is empty, is not a SQLite database, is damaged or has no tables.
+    """
+    with _open(source) as connection:
+        return {
+            table: _describe(connection, table, kind)
+            for table, kind in _tables(connection, source.name)
+        }
 
 
 class SqliteLoader:
@@ -81,7 +99,7 @@ class SqliteLoader:
         """
         name = source.name
         with _open(source) as connection:
-            tables = _tables(connection, name)
+            tables = [table for table, _ in _tables(connection, name)]
             table = options.table if options.table is not None else tables[0]
             if table not in tables:
                 raise ReadError(f"'{name}' has no table called '{table}'.")
@@ -124,22 +142,40 @@ def _open(source: Source) -> Iterator[sqlite3.Connection]:
         yield connection
 
 
-def _tables(connection: sqlite3.Connection, name: str) -> tuple[str, ...]:
+def _describe(connection: sqlite3.Connection, table: str, kind: str) -> str:
+    """Rows (tables only) and columns of ``table``, as text for the user."""
+    quoted = _quote(table)
+    try:
+        # LIMIT 0 runs nothing, but the cursor still knows the columns.
+        n_cols = len(connection.execute(f"SELECT * FROM {quoted} LIMIT 0").description)
+        columns = f"{n_cols} column{'' if n_cols == 1 else 's'}"
+        if kind == "view":
+            return f"view · {columns}"
+        n_rows = connection.execute(f"SELECT COUNT(*) FROM {quoted}").fetchone()[0]
+    except sqlite3.DatabaseError:
+        return "cannot be read"
+    return f"{n_rows:,} row{'' if n_rows == 1 else 's'} · {columns}"
+
+
+def _tables(connection: sqlite3.Connection, name: str) -> tuple[tuple[str, str], ...]:
     """Tables and views of an open database, sorted by name, without SQLite's own.
+
+    Returns:
+        ``(name, kind)`` pairs, where kind is ``"table"`` or ``"view"``.
 
     Raises:
         ReadError: The database is damaged or has no tables.
     """
     try:
         rows = connection.execute(
-            "SELECT name FROM sqlite_schema WHERE type IN ('table', 'view')"
+            "SELECT name, type FROM sqlite_schema WHERE type IN ('table', 'view')"
             " AND name NOT LIKE 'sqlite\\_%' ESCAPE '\\' ORDER BY name"
         ).fetchall()
     except sqlite3.DatabaseError as e:
         raise ReadError(f"'{name}' is damaged and cannot be read: {e}") from e
     if not rows:
         raise ReadError(f"'{name}' has no tables.")
-    return tuple(row[0] for row in rows)
+    return tuple((row[0], row[1]) for row in rows)
 
 
 def _describe_blobs(df: pd.DataFrame) -> tuple[pd.DataFrame, tuple[str, ...]]:

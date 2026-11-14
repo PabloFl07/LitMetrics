@@ -11,11 +11,12 @@ loader by the type of the options and cannot pair a file with the options of ano
 
 Some files hold several datasets (the tables of a database, the sheets of a workbook): their
 format has ``FileFormat.parts``. The user picks one from ``list_parts`` and the name of that
-part goes to ``detect_options``. Pages only see a label and names, never the format.
+part goes to ``detect_options``. Pages only see a label, names and descriptions, never the
+format.
 """
 
-from collections.abc import Callable
-from dataclasses import dataclass
+from collections.abc import Callable, Mapping
+from dataclasses import dataclass, field
 from typing import Any
 
 from litmetrics.core.io import (
@@ -41,13 +42,14 @@ class PartsSpec[OptionsT]:
 
     Attributes:
         label: What one dataset is called, shown to the user ("Table", "Sheet").
-        names: Lists the datasets of a file, in the order to show them. Raises ``ReadError``
-            when the file cannot be read.
+        describe: Lists the datasets of a file, in the order to show them, each with a short
+            description for the user (its size). Raises ``ReadError`` when the file cannot be
+            read.
         select: Returns the options that read the dataset of that name.
     """
 
     label: str
-    names: Callable[[Source], tuple[str, ...]]
+    describe: Callable[[Source], Mapping[str, str]]
     select: Callable[[OptionsT, str], OptionsT]
 
 
@@ -58,10 +60,13 @@ class Parts:
     Attributes:
         label: What one dataset is called ("Table").
         names: Their names, in the order to show them. Never empty.
+        descriptions: Name -> short text about that dataset (``"20,640 rows · 10 columns"``),
+            shown next to its name. Written by the format: pages show it as is.
     """
 
     label: str
     names: tuple[str, ...]
+    descriptions: Mapping[str, str] = field(default_factory=dict)
 
 
 @dataclass(frozen=True)
@@ -102,7 +107,9 @@ FORMATS: tuple[FileFormat[Any], ...] = (
         SqliteOptions,
         sqlite_loader.detect_options,
         sqlite_loader.SqliteLoader(),
-        PartsSpec(sqlite_loader.PART_LABEL, sqlite_loader.table_names, sqlite_loader.with_table),
+        PartsSpec(
+            sqlite_loader.PART_LABEL, sqlite_loader.describe_tables, sqlite_loader.with_table
+        ),
     ),
     FileFormat(
         parquet_loader.FORMAT_NAME,
@@ -150,7 +157,8 @@ def list_parts(source: Source) -> Parts | None:
     spec = format_for(source.name).parts
     if spec is None:
         return None
-    return Parts(spec.label, spec.names(source))
+    descriptions = spec.describe(source)
+    return Parts(spec.label, tuple(descriptions), descriptions)
 
 
 def detect_options(source: Source, part: str | None = None) -> ReadOptions:

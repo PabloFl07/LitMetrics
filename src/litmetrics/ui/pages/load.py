@@ -14,21 +14,26 @@ preview of the first rows. The profile of each column is in the Profile page.
 
 Every dataset read is kept in memory (``cache.cached_datasets``, shared by all sessions). The
 page lists them, to open one again without its file, remove one, or clear the whole cache;
-the sidebar (``ui/sidebar.py``) only switches between them, from any page.
+the sidebar (``ui/sidebar.py``) only switches between them, from any page. For a file with
+several datasets (the tables of a database), the list of its datasets goes above the preview;
+the sidebar has a selector of them too.
 
 If a file cannot be read, the error is shown and the previous dataset, if any, stays active.
 The error is remembered for that upload, so later reruns show it without reading the file
 again.
 """
 
+from collections.abc import Iterator
+from contextlib import contextmanager
+
 import streamlit as st
 from streamlit.typing import UploadedFile
 
 from litmetrics.config import LoadConfig
 from litmetrics.core.io import formats
-from litmetrics.core.io.base import LoadedDataset, ReadError, Source, compute_dataset_id
+from litmetrics.core.io.base import LoadedDataset, ReadError, Source
 from litmetrics.core.io.library import LibraryEntry
-from litmetrics.ui import cache, state, style, tables
+from litmetrics.ui import cache, reading, state, style, tables
 
 
 def load_page() -> None:
@@ -40,16 +45,20 @@ def load_page() -> None:
     )
     if uploaded is not None:
         _load(uploaded)
-    _part()
+    # After the upload: a database just uploaded starts with its first table.
+    reading.read_chosen_part()
+    # The list is drawn after the reads, so a dataset read on this rerun is already in it.
     _cached_datasets()
 
     # The dataset lives in the session state, so it stays after the file is removed from the
     # uploader or the user goes to another page.
     dataset = state.get_dataset()
     if dataset is None:
-        st.info("Upload a file to start.")
+        if not _parts():
+            st.info("Upload a file to start.")
         return
     _summary(dataset)
+    _parts()
     _preview(dataset)
 
 
@@ -60,8 +69,8 @@ def _load(uploaded: UploadedFile) -> None:
     """Read ``uploaded`` and make it the active dataset. Show an error if it cannot be read.
 
     Steps: skip if this upload was already processed, or show its error if it already failed.
-    A file with several datasets is only listed and kept: ``_part`` reads them. Any other is
-    read here.
+    A file with several datasets is only listed and kept: ``reading.read_chosen_part`` reads
+    them. Any other is read here.
     """
     source_id = uploaded.file_id
     # Checked before ``getvalue``, which copies the whole file on every call.
@@ -79,55 +88,11 @@ def _load(uploaded: UploadedFile) -> None:
         return
     if parts is not None:
         state.set_multipart(source, parts)
-    elif _read(source, None, source_id):
-        # A file of one dataset replaces the file with several: its selector goes away.
-        state.clear_multipart()
-
-
-def _part() -> None:
-    """Draw the selector of the active file with several datasets, and read the chosen one.
-
-    The file and its datasets come from the session state, not from the uploader, so the
-    selector stays and keeps its choice after visiting another page (the uploader forgets
-    its file there). Each dataset of the file is a read of its own, processed once.
-    """
-    if (multipart := state.get_multipart()) is None:
-        return
-    source, parts = multipart
-    state.restore_part_widget()
-    part = st.selectbox(parts.label, parts.names, key=state.PART_WIDGET)
-    state.set_part(part)
-    read_id = f"{source.source_id}/{part}"
-    if not state.source_changed(read_id):
-        return
-    if (error := state.get_read_error(read_id)) is not None:
+    elif (error := reading.read(source, None, source_id)) is not None:
         st.error(error)
-        return
-    _read(source, part, read_id)
-
-
-def _read(source: Source, part: str | None, read_id: str) -> bool:
-    """Read ``part`` of ``source`` (``None``: its only dataset) and make it the active dataset.
-
-    Guess how to read it, read it and convert its columns to their semantic types (cached by
-    content), and store it. The schema only replaces the current one when the content is new.
-    On a ``ReadError`` the message is shown and remembered for ``read_id``.
-
-    Returns:
-        Whether the dataset was read.
-    """
-    try:
-        options = formats.detect_options(source, part)
-        dataset_id = compute_dataset_id(source.data, options)
-        dataset, schema = cache.load_dataset(dataset_id, source, options, part)
-    except ReadError as e:
-        # Exceptions are not cached: without this, every rerun would read the file again.
-        state.set_read_error(read_id, str(e))
-        st.error(str(e))
-        return False
-    if state.set_dataset(dataset, dataset_id, read_id):
-        state.set_schema(schema)
-    return True
+    else:
+        # A file of one dataset replaces the file with several: its list goes away.
+        state.clear_multipart()
 
 
 def _is_active_multipart(source_id: str) -> bool:
@@ -171,16 +136,11 @@ def _cached_datasets() -> None:
 def _cached_row(entry: LibraryEntry, active: bool) -> None:
     """One dataset kept in memory: name, size, when it was read, and its buttons."""
     dataset = entry.dataset
-    with st.container(
-        horizontal=True, vertical_alignment="center", key=f"cached_{entry.dataset_id}"
-    ):
-        with st.container(gap=None):
-            badge = " :green-badge[Active]" if active else ""
-            st.markdown(f"**{entry.label}**{badge}")
-            st.caption(
-                f"{dataset.format} · {dataset.n_rows:,} rows · {dataset.n_cols} columns · "
-                f"read at {entry.loaded_at:%H:%M}"
-            )
+    caption = (
+        f"{dataset.format} · {dataset.n_rows:,} rows · {dataset.n_cols} columns · "
+        f"read at {entry.loaded_at:%H:%M}"
+    )
+    with _row(f"cached_{entry.dataset_id}", entry.label, caption, active):
         st.button(
             "Open",
             icon=":material/open_in_new:",
@@ -197,6 +157,21 @@ def _cached_row(entry: LibraryEntry, active: bool) -> None:
             on_click=_remove_cached,
             args=(entry.dataset_id,),
         )
+
+
+@contextmanager
+def _row(key: str, title: str, caption: str, active: bool) -> Iterator[None]:
+    """Row of a list of datasets: title, Active badge and caption; buttons go inside the block.
+
+    Shared by the datasets of a file and the datasets in memory, so both lists look the same.
+    """
+    with st.container(horizontal=True, vertical_alignment="center", key=key):
+        with st.container(gap=None):
+            badge = " :green-badge[Active]" if active else ""
+            st.markdown(f"**{title}**{badge}")
+            if caption:
+                st.caption(caption)
+        yield
 
 
 def _open_cached(dataset_id: str) -> None:
@@ -253,6 +228,42 @@ def _summary(dataset: LoadedDataset) -> None:
         # Written by the loader of each format: the page does not know what they mean.
         details = ", ".join(f"{label} **{value}**" for label, value in dataset.details.items())
         st.caption(f":material/tune: Read with {details}.")
+
+
+def _parts() -> bool:
+    """List the datasets of the active file with several, with an Open button each.
+
+    Drawn like the datasets in memory. The file and its choice come from the session state,
+    not from the uploader, so the list stays after visiting another page (the uploader forgets
+    its file there). Picking one only records the choice: ``reading.read_chosen_part`` reads
+    it on the next rerun, as for the selector of the sidebar.
+
+    Returns:
+        Whether there is such a file (the list was drawn).
+    """
+    if (multipart := state.get_multipart()) is None:
+        return False
+    source, parts = multipart
+    if (error := reading.part_error()) is not None:
+        st.error(error)
+    active = reading.active_part()
+    # The label names the active one, so it shows while collapsed. It changes with the
+    # choice, which collapses the expander after picking a dataset.
+    label = f"{parts.label}: {active or reading.chosen_part(parts)}"
+    with st.expander(label, icon=":material/table_view:"):
+        st.caption(f"{len(parts.names)} in {source.name}. Open one to read it.")
+        for i, name in enumerate(parts.names):
+            # Positions, not names, in keys: names may hold any character.
+            with _row(f"part_{i}", name, parts.descriptions.get(name, ""), name == active):
+                st.button(
+                    "Open",
+                    icon=":material/open_in_new:",
+                    key=f"open_part_{i}",
+                    disabled=name == active,
+                    on_click=state.choose_part,
+                    args=(name,),
+                )
+    return True
 
 
 def _preview(dataset: LoadedDataset) -> None:

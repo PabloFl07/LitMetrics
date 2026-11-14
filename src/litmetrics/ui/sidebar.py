@@ -3,12 +3,16 @@
 For now it holds the selector of the active dataset, which lists the datasets kept in memory
 (``cache.cached_datasets``), so the user can switch between them from any page without
 uploading the file again. Removing them is done in the Load page.
+
+When the active dataset is one of the datasets of a file with several (a table of a
+database), a second selector below lists the others. Picking one only records the choice:
+``reading.read_chosen_part``, run by app.py before the page, reads it.
 """
 
 import streamlit as st
 
 from litmetrics.core.io.library import LibraryEntry
-from litmetrics.ui import cache, state
+from litmetrics.ui import cache, reading, state
 
 
 def draw() -> None:
@@ -20,6 +24,7 @@ def draw() -> None:
         return
     with st.sidebar:
         _dataset_switcher(entries, active_id)
+        _part_switcher()
 
 
 def _dataset_switcher(entries: tuple[LibraryEntry, ...], active_id: str | None) -> None:
@@ -53,3 +58,36 @@ def _on_switch() -> None:
         st.toast("That dataset is no longer in memory. Upload the file again.")
         return
     state.switch_dataset(entry.dataset, entry.dataset_id, entry.schema)
+
+
+def _part_switcher() -> None:
+    """Selector of the dataset of the active file with several, if the active one is of it."""
+    if (multipart := state.get_multipart()) is None:
+        return
+    parts = multipart[1]
+    if (active := reading.active_part()) is None:
+        # The active dataset is of another file: this one's list would not be about it.
+        return
+    state.sync_part_switcher(active)
+    st.selectbox(
+        parts.label,
+        parts.names,
+        # The description (its size) is written by the format: shown as is.
+        format_func=lambda name: _part_label(name, parts.descriptions.get(name)),
+        key=state.PART_SWITCHER_WIDGET,
+        on_change=_on_part_switch,
+    )
+    if (error := reading.part_error()) is not None:
+        st.error(error)
+
+
+def _part_label(name: str, description: str | None) -> str:
+    """Option of the selector of tables: its name and, when the format gives one, its size."""
+    return name if not description else f"{name} — {description}"
+
+
+def _on_part_switch() -> None:
+    """Record the dataset picked; app.py reads it before drawing the page."""
+    name = state.widget_value(state.PART_SWITCHER_WIDGET)
+    if name is not None and name != reading.active_part():
+        state.choose_part(name)
