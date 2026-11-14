@@ -8,8 +8,10 @@ with it.
 
 The cache is shared by all sessions, so two users uploading the same file read it once.
 
-- The dataset itself is kept with ``st.cache_resource``: every caller gets the same object, with
-  no copy (R-C1, R-C4). That is safe because nothing modifies it: ``core/`` is pure.
+- The datasets read are kept in a ``DatasetLibrary`` held by ``st.cache_resource``: every caller
+  gets the same object, with no copy (R-C1, R-C4). That is safe because nothing modifies it:
+  ``core/`` is pure. Unlike a function cache, the library can be listed and emptied, so the user
+  can go back to a dataset or forget it (``cached_datasets``, ``forget_dataset``, ``clear_all``).
 - Everything else uses ``st.cache_data`` and returns aggregates, whose size grows with the
   number of columns, never with the number of rows (R-C1). One wrapper per section, not per
   measure (R-C6), each with a limit of entries (R-C3).
@@ -24,6 +26,7 @@ the view (``view_id``) with the DataFrame without those columns.
 
 import hashlib
 from collections.abc import Iterable, Mapping
+from datetime import datetime
 
 import pandas as pd
 import streamlit as st
@@ -32,6 +35,7 @@ from litmetrics.config import LoadConfig, ProfileConfig
 from litmetrics.core import columns, profile
 from litmetrics.core.io import formats
 from litmetrics.core.io.base import LoadedDataset, Source
+from litmetrics.core.io.library import DatasetLibrary, LibraryEntry
 from litmetrics.core.schema import Schema, SemanticType, prepare_dataset
 
 _PROFILE_MAX = ProfileConfig.cache_max_datasets
@@ -54,22 +58,62 @@ def view_id(dataset_id: str, skipped: Iterable[str]) -> str:
 # Loading
 
 
-# Exceptions (ReadError) are not cached, so a failed read is tried again on the next call.
-@st.cache_resource(
-    max_entries=LoadConfig.cache_max_datasets, show_spinner="Reading the file…", show_time=True
-)
+@st.cache_resource
+def _library() -> DatasetLibrary:
+    """The datasets read, shared by every session (R-C1, R-C4): one object, never copied."""
+    return DatasetLibrary(LoadConfig.cache_max_datasets)
+
+
 def load_dataset(
-    dataset_id: str, _source: Source, options: formats.ReadOptions
+    dataset_id: str, _source: Source, options: formats.ReadOptions, part: str | None = None
 ) -> tuple[LoadedDataset, Schema]:
     """Parse ``_source`` with ``options`` and type its columns, once per ``dataset_id``.
 
     ``options`` are the read options of the file (``formats.detect_options``), and choose the
-    loader. They are a frozen dataclass, which Streamlit hashes into the cache key.
+    loader. ``part`` is the dataset of a file with several, only to name it in the library.
+
+    The result is kept in the library (``cached_datasets``), not in a Streamlit function
+    cache, so the user can list it and forget it. A failed read is not kept: a ``ReadError``
+    is raised again on the next call.
 
     Returns the dataset, with every column converted to the dtype of its semantic type, and its
     schema (see ``schema.prepare_dataset``). Callers must not modify them: they are shared.
+
+    Raises:
+        ReadError: The file cannot be read.
     """
-    return prepare_dataset(formats.load(_source, options))
+    library = _library()
+    if (entry := library.get(dataset_id)) is not None:
+        return entry.dataset, entry.schema
+    with st.spinner("Reading the file…", show_time=True):
+        dataset, schema = prepare_dataset(formats.load(_source, options))
+    library.put(LibraryEntry(dataset_id, dataset, schema, part, datetime.now()))
+    return dataset, schema
+
+
+def cached_datasets() -> tuple[LibraryEntry, ...]:
+    """Datasets kept in memory, most recently used first."""
+    return _library().entries()
+
+
+def cached_dataset(dataset_id: str) -> LibraryEntry | None:
+    """Dataset ``dataset_id`` if it is still kept (it may have been dropped as the oldest)."""
+    return _library().get(dataset_id)
+
+
+def forget_dataset(dataset_id: str) -> None:
+    """Drop ``dataset_id`` from memory, for every session.
+
+    Its Profile results stay until they are pushed out by newer ones: ``st.cache_data`` can only
+    forget one entry given all its arguments.
+    """
+    _library().remove(dataset_id)
+
+
+def clear_all() -> None:
+    """Drop every dataset and every computed result (Profile), for every session."""
+    _library().clear()
+    st.cache_data.clear()
 
 
 # Profile: page header, Issues and Missing values

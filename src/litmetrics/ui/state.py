@@ -15,6 +15,9 @@ State kept per browser session:
     part        Dataset of that file picked by the user, to restore the selector.
     schema      Semantic types of the active dataset. Cleared when the dataset changes.
     skipped     Columns the user left out of the profile. Cleared when the dataset changes.
+
+The active dataset changes on a new read (``set_dataset``), when the user picks one kept in
+memory (``switch_dataset``) or removes it (``clear_dataset``).
 """
 
 from collections.abc import Iterable
@@ -41,6 +44,10 @@ _PART = "part"
 # Key of the widget that picks the dataset of a file with several. It is not WIDGET_PREFIX:
 # picking another dataset resets those widgets, and must not reset itself.
 PART_WIDGET = "part_selector"
+
+# Key of the sidebar selector of the active dataset. Not WIDGET_PREFIX: it lists datasets, not
+# columns, and is set to the active dataset before every draw (``sync_switcher``).
+SWITCHER_WIDGET = "dataset_switcher"
 
 # Widgets whose value depends on the columns of the dataset use this prefix,
 # so they are cleared when a new dataset is loaded.
@@ -99,6 +106,31 @@ def set_dataset(dataset: LoadedDataset, dataset_id: str, source_id: str) -> bool
     st.session_state[_DATASET] = dataset
     st.session_state[_DATASET_ID] = dataset_id
     return True
+
+
+def switch_dataset(dataset: LoadedDataset, dataset_id: str, schema: Schema) -> None:
+    """Make a dataset kept in memory the active one, without reading any file.
+
+    ``source_id`` is kept: the file still in the uploader stays processed, so it is not read
+    again and does not take the place of the dataset chosen. Does nothing if it is already
+    active.
+    """
+    if st.session_state[_DATASET_ID] == dataset_id:
+        return
+    _reset_dependent_state()
+    st.session_state[_DATASET] = dataset
+    st.session_state[_DATASET_ID] = dataset_id
+    st.session_state[_SCHEMA] = schema
+
+
+def clear_dataset() -> None:
+    """Leave the session with no active dataset (it was dropped from memory).
+
+    ``source_id`` is kept, so the file still in the uploader is not read again.
+    """
+    _reset_dependent_state()
+    st.session_state[_DATASET] = None
+    st.session_state[_DATASET_ID] = None
 
 
 def get_read_error(source_id: str) -> str | None:
@@ -239,6 +271,15 @@ def widget_key(name: str) -> str:
 def widget_value(key: str) -> Any:
     """Current value of widget ``key``, for its ``on_change`` callback."""
     return st.session_state[key]
+
+
+def sync_switcher() -> None:
+    """Point the sidebar selector at the active dataset. Call it before drawing the selector.
+
+    The active dataset also changes from the Load page; without this the selector would keep
+    showing the one picked before.
+    """
+    st.session_state[SWITCHER_WIDGET] = st.session_state[_DATASET_ID]
 
 
 # Internal helpers
