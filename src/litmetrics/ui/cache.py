@@ -87,13 +87,18 @@ def load_dataset(
         return entry.dataset, entry.schema
     with st.spinner("Reading the file…", show_time=True):
         dataset, schema = prepare_dataset(formats.load(_source, options))
-    library.put(LibraryEntry(dataset_id, dataset, schema, part, datetime.now()))
+    library.put(LibraryEntry.create(dataset_id, dataset, schema, part, datetime.now()))
     return dataset, schema
 
 
 def cached_datasets() -> tuple[LibraryEntry, ...]:
     """Datasets kept in memory, most recently used first."""
     return _library().entries()
+
+
+def cached_bytes() -> int:
+    """Memory taken by the datasets kept in memory, together."""
+    return _library().total_bytes()
 
 
 def cached_dataset(dataset_id: str) -> LibraryEntry | None:

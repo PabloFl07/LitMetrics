@@ -26,6 +26,8 @@ class LibraryEntry:
         schema: Semantic types of its columns.
         part: Dataset of a file with several (a table of a database), or None.
         loaded_at: When it was read.
+        memory_bytes: Memory its DataFrame takes (``memory_usage(deep=True)``), measured
+            once by ``create``: deep counts the text of object columns, value by value.
     """
 
     dataset_id: str
@@ -33,6 +35,20 @@ class LibraryEntry:
     schema: Schema
     part: str | None
     loaded_at: datetime
+    memory_bytes: int
+
+    @classmethod
+    def create(
+        cls,
+        dataset_id: str,
+        dataset: LoadedDataset,
+        schema: Schema,
+        part: str | None,
+        loaded_at: datetime,
+    ) -> LibraryEntry:
+        """Entry for ``dataset``, with the memory it takes measured now."""
+        memory = int(dataset.df.memory_usage(deep=True).sum())
+        return cls(dataset_id, dataset, schema, part, loaded_at, memory)
 
     @property
     def label(self) -> str:
@@ -79,6 +95,11 @@ class DatasetLibrary:
         """Every entry, most recently used first."""
         with self._lock:
             return tuple(reversed(self._entries.values()))
+
+    def total_bytes(self) -> int:
+        """Memory taken by the DataFrames of every entry (``LibraryEntry.memory_bytes``)."""
+        with self._lock:
+            return sum(entry.memory_bytes for entry in self._entries.values())
 
     def remove(self, dataset_id: str) -> bool:
         """Forget ``dataset_id``. Return whether it was kept."""
