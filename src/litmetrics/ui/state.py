@@ -180,6 +180,19 @@ def clear_multipart() -> None:
     st.session_state[_PART_IDS] = {}
 
 
+def close_multipart() -> None:
+    """Close the file with several datasets on the user's request, freeing its bytes.
+
+    Its upload is marked as processed: if the file is still in the uploader, it is not listed
+    and read again (which would open it back). The active dataset, if it is one of its
+    datasets, stays: it is kept in memory without the file.
+    """
+    if (multipart := st.session_state[_MULTIPART]) is None:
+        return
+    st.session_state[_SOURCE_ID] = multipart[0].source_id
+    clear_multipart()
+
+
 def get_part() -> str | None:
     """Dataset of the active file with several picked by the user, or None (the first one)."""
     return st.session_state[_PART]
