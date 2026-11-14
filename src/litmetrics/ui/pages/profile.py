@@ -77,11 +77,11 @@ _NUMERIC_DEFAULT_GROUPS = ["Position", "Outliers"]
 # height (``ProfileConfig.table_row_height``) passed to every table sized this way.
 _HEADER_PX = 36
 # Height of the small charts of the date and text column inspectors.
-_CHART_HEIGHT = "240px"
+_CHART_HEIGHT = "200px"
 # Height of the charts of the Missing values tab.
 _MISSING_CHART_HEIGHT = "300px"
 # Height of the histogram / boxplot of the numeric column inspector.
-_INSPECT_CHART_HEIGHT = "300px"
+_INSPECT_CHART_HEIGHT = "240px"
 # Material icon of each chart of the numeric column inspector.
 _NUMERIC_CHART_ICONS = {"Histogram": "bar_chart", "Boxplot": "candlestick_chart"}
 

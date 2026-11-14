@@ -256,7 +256,7 @@ def hbar_options(labels: list[str], counts: list[int], colors: ChartColors) -> d
 
 def hbar_height(n_bars: int) -> str:
     """Height that gives each horizontal bar room for its label."""
-    return f"{40 + 28 * n_bars}px"
+    return f"{40 + 24 * n_bars}px"
 
 
 def boxplot_options(
