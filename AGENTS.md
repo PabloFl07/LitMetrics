@@ -35,6 +35,7 @@ src/litmetrics/
     io/sniffing.py  Detects separator, encoding, header and decimal mark of a CSV -> CsvOptions
     io/csv_loader.py
     io/sqlite_loader.py  One table or view of a SQLite database -> SqliteOptions(table)
+    io/library.py   DatasetLibrary: datasets kept in memory (LRU), listable and removable
     io/parquet_loader.py, io/feather_loader.py  Parquet / Feather (Arrow IPC) files, no options
     io/arrow_table.py    Arrow table -> DataFrame, shared by Parquet and Feather
     schema.py       Semantic type of each column, and conversion to its dtype at load time
@@ -44,7 +45,9 @@ src/litmetrics/
     parallel.py     map_columns: one column per thread, for numpy work only (R-P8)
   ui/             The only package that imports streamlit
     state.py        The ONLY module that touches st.session_state
-    cache.py        Cache wrappers around core functions (load_dataset, Profile sections)
+    cache.py        Cache wrappers around core functions (load_dataset, Profile sections) and
+                    the dataset library (cached_datasets, forget_dataset, clear_all)
+    sidebar.py      Sidebar of every page (drawn by app.py after the page): dataset switcher
     charts.py       ECharts option builders: plain dicts, no streamlit, no streamlit_echarts
     echarts.py      The only module importing streamlit_echarts: ``echarts.show`` draws themed charts
     theme.py        Reads the theme (both modes): CSS variables --lm-* and chart colors

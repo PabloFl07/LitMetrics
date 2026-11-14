@@ -344,9 +344,16 @@ converted, and Arrow's pool is released after each read (R-L5).
 The cache lives in memory and is **shared by all sessions**, so two users uploading the same
 file only read it once. Rules R-C1 to R-C6 in `docs/performance.md` explain the choices below.
 
-- `load_dataset` uses `@st.cache_resource`: every caller gets the same `LoadedDataset` object,
-  with no copy. That is safe because nothing modifies it (`core/` is pure). It keeps at most
-  `LoadConfig.cache_max_datasets` (5) datasets.
+- `load_dataset` keeps what it reads in a `DatasetLibrary` (`core/io/library.py`), one object
+  held by `@st.cache_resource`: every caller gets the same `LoadedDataset` object, with no
+  copy. That is safe because nothing modifies it (`core/` is pure). It keeps at most
+  `LoadConfig.cache_max_datasets` (5) datasets, least recently used dropped first. Unlike a
+  function cache, the library can be listed and emptied: `cached_datasets()`,
+  `cached_dataset(id)`, `forget_dataset(id)` and `clear_all()` (which also empties the
+  `st.cache_data` of the Profile). The Load page lists them to open one again, remove one or
+  clear the cache; the sidebar (`ui/sidebar.py`) switches between them from any page. Both use
+  `state.switch_dataset`, which keeps `source_id` so the file still in the uploader is not read
+  again and does not replace the chosen dataset.
 - The Profile wrappers use `@st.cache_data` and return aggregates, whose size grows with the
   number of columns, not of rows. They keep `ProfileConfig.cache_max_datasets` (3) datasets
   each (`column_detail`: `ProfileConfig.cache_max_columns`).
@@ -361,8 +368,9 @@ Convention for the wrappers:
 - Other arguments must be hashable (frozen dataclasses, tuples).
 - Exceptions are not cached: a `ReadError` is tried again on the next call.
 
-`load_dataset(dataset_id, _source, options)` reads the file with `formats.load` and runs
-`schema.prepare_dataset`, with `show_spinner="Reading the file…"`. `options` is whatever
+`load_dataset(dataset_id, _source, options, part)` reads the file with `formats.load` and
+runs `schema.prepare_dataset` under a "Reading the file…" spinner; `part` only names the
+dataset in the library. `options` is whatever
 frozen dataclass the format of the file uses. It returns
 `(LoadedDataset, Schema)`. The Profile wrappers (`base_profile`, `rows_with_missing`,
 `correlation`, `numeric_stats`, `categorical_stats`, `datetime_stats`, `text_stats`,
@@ -380,8 +388,8 @@ DataFrame. Measures of single columns do not depend on the others: they keep the
 dataset and the whole DataFrame, and receive the columns to describe as `names`, so skipping
 columns reuses them.
 
-`dataset_id` must be passed even when it looks redundant. Without it the key of `load_dataset`
-would be only `options`, and two different files with the same detected options (e.g. both
+`dataset_id` must be passed even when it looks redundant: it is the key of the library.
+Without it the key would be only `options`, and two different files with the same detected options (e.g. both
 comma, UTF‑8, with header) would share one entry: the second upload would show the first
 file's data.
 
@@ -393,8 +401,8 @@ when the dataset changes live in one place.
 
 | Key | Content | Reset when |
 |---|---|---|
-| `dataset` | Active `LoadedDataset` or `None` | New content |
-| `dataset_id` | Content hash of the active dataset | New content |
+| `dataset` | Active `LoadedDataset` or `None` | New content; switching to a kept dataset; `None` when removed from memory |
+| `dataset_id` | Content hash of the active dataset | Same as `dataset` |
 | `source_id` | Last read that was processed (`read_id`: upload, plus part) | Every processed read |
 | `read_error` | Last read (or listing of parts) that failed, and its message | Next failure |
 | `multipart` | Active file with several datasets: its `Source` (bytes kept) and `Parts` | New upload with parts; cleared when a single-dataset file is read |
@@ -403,6 +411,7 @@ when the dataset changes live in one place.
 | `schema` | `Schema` of the active dataset | New content |
 | `skipped_columns` | Columns the user left out of the profile (tuple) | New content |
 | `w_*` | Widgets that depend on the columns | New content |
+| `dataset_switcher` | Sidebar selector of the active dataset (not `w_`) | Set to `dataset_id` before every draw (`sync_switcher`) |
 
 Functions:
 
