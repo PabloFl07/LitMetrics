@@ -8,11 +8,17 @@ Workbooks are read with calamine (``python-calamine``, pandas' ``"calamine"`` en
 reader written in Rust that opens .xlsx, .xlsm, .xlsb, .xls and .ods alike, from the bytes
 of the upload. The first row of a sheet holds the column names.
 
-Cells keep the type Excel stored (numbers, dates, booleans). A column whose cells have
-different types (numbers and a few ``"N/A"``) is turned into text, as a CSV column would be,
-so the schema can find it is numeric and count the values that are not.
+Cells keep the type Excel stored (numbers, dates, booleans). Two kinds of columns are turned
+into text, as a CSV column would be, and listed in ``details``:
+
+- times of day (``"09:30:00"``): pandas keeps them as ``datetime.time`` objects, which the
+  schema would take for dates and fail to convert, losing every value (Parquet and Feather
+  do the same, see ``arrow_table.py``);
+- columns whose cells have different types (numbers and a few ``"unknown"``), so the schema
+  can find they are numeric and count the values that are not.
 """
 
+import datetime as dt
 import io
 from dataclasses import dataclass, replace
 
@@ -104,8 +110,10 @@ class ExcelLoader:
         if df.empty:
             raise ReadError(f"Sheet '{sheet}' of '{name}' has no data rows.")
         df.columns = [str(column) for column in df.columns]
-        df, mixed = _mixed_to_text(df)
+        df, times, mixed = _to_text(df)
         details = {PART_LABEL.lower(): sheet}
+        if times:
+            details["time columns"] = ", ".join(times) + " (read as text)"
         if mixed:
             details["mixed columns"] = ", ".join(mixed) + " (read as text)"
         return LoadedDataset(df, name, FORMAT_NAME, details)
@@ -160,17 +168,26 @@ def _describe(workbook: calamine.CalamineWorkbook, sheet: str, hidden: bool) -> 
     return f"hidden · {size}" if hidden else size
 
 
-def _mixed_to_text(df: pd.DataFrame) -> tuple[pd.DataFrame, tuple[str, ...]]:
-    """Turn the columns whose cells have several types into text.
+def _to_text(df: pd.DataFrame) -> tuple[pd.DataFrame, tuple[str, ...], tuple[str, ...]]:
+    """Turn the columns of times of day, and those whose cells have several types, into text.
 
-    Missing cells stay missing. Returns the new DataFrame and the names of those columns.
+    Missing cells stay missing.
+
+    Returns:
+        The new DataFrame, the names of the time columns and of the mixed columns.
     """
-    mixed = tuple(
-        column
-        for column in df.columns
-        # Only object columns can mix types: a column of one type gets that type's dtype.
-        if df[column].dtype == object and len(set(map(type, df[column].dropna()))) > 1
-    )
-    if not mixed:
-        return df, ()
-    return df.assign(**{c: df[c].astype("str").where(df[c].notna()) for c in mixed}), mixed
+    times: list[str] = []
+    mixed: list[str] = []
+    for column in df.columns:
+        # Only object columns can hold these: a column of one plain type gets its own dtype.
+        if df[column].dtype != object:
+            continue
+        kinds = set(map(type, df[column].dropna()))
+        if kinds == {dt.time}:
+            times.append(column)
+        elif len(kinds) > 1:
+            mixed.append(column)
+    if not times and not mixed:
+        return df, (), ()
+    text = {c: df[c].astype("str").where(df[c].notna()) for c in (*times, *mixed)}
+    return df.assign(**text), tuple(times), tuple(mixed)

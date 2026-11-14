@@ -36,6 +36,8 @@ def read(source: Source, part: str | None, read_id: str) -> str | None:
         return str(e)
     if state.set_dataset(dataset, dataset_id, read_id):
         state.set_schema(schema)
+    if part is not None:
+        state.set_part_id(part, dataset_id)
     return None
 
 
@@ -70,18 +72,10 @@ def part_error() -> str | None:
 def active_part() -> str | None:
     """Dataset of the file with several that is the active dataset, or None.
 
-    None when there is no such file, or the active dataset is another (one of another file
-    opened from the datasets in memory). Looked up in the library, which knows the file and
-    part of each dataset kept.
+    None when there is no such file, or the active dataset is another: one of another file
+    opened from the datasets in memory, even a file of the same name (an older version).
     """
-    if (multipart := state.get_multipart()) is None:
-        return None
-    source = multipart[0]
-    active_id = state.get_dataset_id()
-    for entry in cache.cached_datasets():
-        if entry.dataset_id == active_id:
-            return entry.part if entry.dataset.name == source.name else None
-    return None
+    return state.part_of(state.get_dataset_id())
 
 
 def _read_id(source: Source, part: str) -> str:

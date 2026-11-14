@@ -55,6 +55,10 @@ DATETIME_MIN_PARSED = 0.95
 # files). Dates that start with the year ("2024-01-02") always use year-month-day.
 DATE_DAYFIRST = True
 
+# A time of day on its own ("09:30", "17:05:10.5", "9:30 PM"). It has the digit groups of a
+# date, but pandas would read it as today at that time: such values do not count as dates.
+_TIME_OF_DAY = r"\d{1,2}:\d{2}(?::\d{2}(?:\.\d+)?)?(?:\s*[AaPp]\.?[Mm]\.?)?"
+
 # Lowercase values accepted as booleans in a text column ("si"/"sí" for Spanish files).
 _BOOLEAN_TOKENS = frozenset({"true", "false", "yes", "no", "y", "n", "t", "f", "si", "sí"})
 # Column names that look like an id: "id", "user_id", "ID", "userId"; not "paid" or "video".
@@ -198,11 +202,12 @@ def _looks_like_datetime(values: pd.Series) -> bool:
     picked = sample(values, INFER_SAMPLE)
     # Every date has three groups of digits ("2024-01-02") or a 4-digit year next to other text
     # ("Jan 2024", "2024-01"). Values without that shape count as not dates even if pandas
-    # would parse them: words ("today"), bare numbers ("2021"), ranges ("10-20"). The check
-    # also skips the slow parse for most text columns.
+    # would parse them: words ("today"), bare numbers ("2021"), ranges ("10-20"), times of day
+    # ("09:30:00", which pandas would date today). The check also skips the slow parse for most
+    # text columns.
     groups = picked.str.count(r"\d+")
     year = picked.str.contains(r"\d{4}") & ~picked.str.fullmatch(r"\d+")
-    shaped = (groups >= 3) | year
+    shaped = ((groups >= 3) | year) & ~picked.str.fullmatch(_TIME_OF_DAY)
     if shaped.mean() < DATETIME_MIN_PARSED:
         return False
     # format="mixed" parses each value on its own and warns about it; the warning is expected.

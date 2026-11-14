@@ -8,11 +8,16 @@ State kept per browser session:
     dataset_id  Content hash of the active dataset (see ``compute_dataset_id``).
     source_id   Id of the last read that was processed (an upload, plus the part read for files
                 with several datasets), to skip it on later reruns.
-    read_error  Id of the last read that could not be done, and its message.
+    read_error  Reads that could not be done: read id -> message. One per read, so two failed
+                reads (a broken upload and an empty table) do not overwrite each other and
+                both stay unread.
     multipart   The active file with several datasets (``Source``, ``Parts``), or None. Its
                 bytes stay in the session so another dataset can be read after the uploader
                 forgot the file (it does when the user visits another page).
     part        Dataset of that file picked by the user (None: the first one).
+    part_ids    Datasets of that file read in this session: dataset id -> name of the part.
+                Tells which part the active dataset is, even with another version of a file
+                of the same name in memory.
     schema      Semantic types of the active dataset. Cleared when the dataset changes.
     skipped     Columns the user left out of the profile. Cleared when the dataset changes.
 
@@ -40,6 +45,7 @@ _SKIPPED = "skipped_columns"
 
 _MULTIPART = "multipart"
 _PART = "part"
+_PART_IDS = "part_ids"
 
 # Key of the sidebar selector of the active dataset. Not WIDGET_PREFIX: it lists datasets, not
 # columns, and is set to the active dataset before every draw (``sync_switcher``).
@@ -72,9 +78,10 @@ def _defaults() -> dict[str, Any]:
         _DATASET: None,
         _DATASET_ID: None,
         _SOURCE_ID: None,
-        _READ_ERROR: None,
+        _READ_ERROR: {},
         _MULTIPART: None,
         _PART: None,
+        _PART_IDS: {},
         _SCHEMA: None,
         _SKIPPED: (),
     }
@@ -134,14 +141,16 @@ def clear_dataset() -> None:
 
 
 def get_read_error(source_id: str) -> str | None:
-    """Message of the error of upload ``source_id``, if reading it already failed."""
-    failed = st.session_state[_READ_ERROR]
-    return failed[1] if failed is not None and failed[0] == source_id else None
+    """Message of the error of read ``source_id``, if reading it already failed."""
+    return st.session_state[_READ_ERROR].get(source_id)
 
 
 def set_read_error(source_id: str, message: str) -> None:
-    """Remember that upload ``source_id`` could not be read, so it is not read again."""
-    st.session_state[_READ_ERROR] = (source_id, message)
+    """Remember that read ``source_id`` could not be done, so it is not tried again.
+
+    Kept per read: a later failure of another read does not make this one be tried again.
+    """
+    st.session_state[_READ_ERROR] = {**st.session_state[_READ_ERROR], source_id: message}
 
 
 # File with several datasets (tables of a database): kept so its selector outlives the uploader
@@ -161,17 +170,33 @@ def set_multipart(source: Source, parts: Parts) -> None:
     """
     st.session_state[_MULTIPART] = (source, parts)
     st.session_state[_PART] = None
+    st.session_state[_PART_IDS] = {}
 
 
 def clear_multipart() -> None:
     """Forget the file with several datasets, and its bytes (a single-dataset file replaced it)."""
     st.session_state[_MULTIPART] = None
     st.session_state[_PART] = None
+    st.session_state[_PART_IDS] = {}
 
 
 def get_part() -> str | None:
     """Dataset of the active file with several picked by the user, or None (the first one)."""
     return st.session_state[_PART]
+
+
+def set_part_id(name: str, dataset_id: str) -> None:
+    """Remember that part ``name`` of the active file with several is dataset ``dataset_id``."""
+    st.session_state[_PART_IDS] = {**st.session_state[_PART_IDS], dataset_id: name}
+
+
+def part_of(dataset_id: str | None) -> str | None:
+    """Part of the active file with several that is dataset ``dataset_id``, or None.
+
+    None as well for a dataset of another file, even one with the same name: only the parts
+    read from the file kept now are known (``set_part_id``).
+    """
+    return st.session_state[_PART_IDS].get(dataset_id)
 
 
 def choose_part(name: str) -> None:
