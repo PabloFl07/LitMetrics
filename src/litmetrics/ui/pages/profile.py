@@ -2,8 +2,8 @@
 
 Headline quality numbers on top, then four tabs:
 - Issues: problems found, with a filter by kind.
-- Columns: an overview with one row per column (select one to inspect it) and one table per
-  semantic type, with only the measures that make sense for it.
+- Columns: an overview with one row per column and one table per semantic type, with only the
+  measures that make sense for it. Selecting a row of any of them inspects that column.
 - Missing values: by column, by row and a sample of incomplete rows.
 - Correlation: heatmap of the numeric columns and the strongest pairs.
 
@@ -297,24 +297,37 @@ def _columns() -> None:
     names = schema.names_of(_VIEWS[view][0])
     df = dataset.df
 
+    # One table key per view and set of skipped columns: a selected row never points to a
+    # column of another table.
+    key = state.widget_key(f"columns_{view}_{active.view_tag}")
     if view == "Overview":
-        _overview(active)
+        selected = _overview(active)
     elif view == "Numeric":
         table = cache.numeric_stats(dataset_id, df, names, _CFG.sample_rows, dataset.unparsed)
-        _numeric_table(_with_labels(table))
+        selected = _numeric_table(_with_labels(table), key)
         _sample_note(dataset, "Percentiles, IQR, skewness and kurtosis are")
     elif view == "Categorical":
-        _categorical_table(cache.categorical_stats(dataset_id, df, names))
+        selected = _categorical_table(cache.categorical_stats(dataset_id, df, names), key)
     elif view == "Dates":
-        _dates_table(cache.datetime_stats(dataset_id, df, names, dataset.unparsed, _now()))
+        table = cache.datetime_stats(dataset_id, df, names, dataset.unparsed, _now())
+        selected = _dates_table(table, key)
     else:
-        _text_table(cache.text_stats(dataset_id, df, names, schema, _CFG.sample_rows))
+        table = cache.text_stats(dataset_id, df, names, schema, _CFG.sample_rows)
+        selected = _text_table(table, key)
         _sample_note(dataset, "Lengths are")
+    if selected is None:
+        st.caption(":material/touch_app: Select a row to inspect that column.")
+    else:
+        _inspector(active, selected)
     _about(_columns_help())
 
 
-def _overview(active: _Active) -> None:
-    """One short row per column. Selecting a row opens the inspector of that column."""
+def _overview(active: _Active) -> str | None:
+    """One short row per column.
+
+    Returns:
+        The name of the column of the selected row, or ``None`` when no row is selected.
+    """
     dataset = active.dataset
     table = cache.column_overview(
         active.dataset_id, dataset.df, active.schema, _CFG.sample_rows, dataset.unparsed
@@ -367,10 +380,7 @@ def _overview(active: _Active) -> None:
         },
     )
     _sample_note(dataset, "Histograms and text lengths are")
-    if not event.selection.rows:
-        st.caption(":material/touch_app: Select a row to inspect that column.")
-        return
-    _inspector(active, str(table.iloc[event.selection.rows[0]]["column"]))
+    return _selected_column(table, event)
 
 
 def _inspector(active: _Active, name: str) -> None:
@@ -631,8 +641,12 @@ def _inspect_text(
         st.dataframe(detail.examples, hide_index=True)
 
 
-def _numeric_table(table: pd.DataFrame) -> None:
-    """Numeric table, with the groups of measures the user picks."""
+def _numeric_table(table: pd.DataFrame, key: str) -> str | None:
+    """Numeric table, with the groups of measures the user picks.
+
+    Returns:
+        The column of the selected row, or ``None``.
+    """
     groups = st.pills(
         "Measures",
         list(_NUMERIC_GROUPS),
@@ -649,13 +663,14 @@ def _numeric_table(table: pd.DataFrame) -> None:
             config[key] = st.column_config.TextColumn(label, help=help_text)
         else:
             config[key] = st.column_config.NumberColumn(label, format=fmt, help=help_text)
-    _stats_table(table, config, column_order=order)
+    return _stats_table(table, key, config, column_order=order)
 
 
-def _categorical_table(table: pd.DataFrame) -> None:
-    """Categorical and boolean table."""
-    _stats_table(
+def _categorical_table(table: pd.DataFrame, key: str) -> str | None:
+    """Categorical and boolean table. Returns the column of the selected row, or ``None``."""
+    return _stats_table(
         table,
+        key,
         {
             "unique": st.column_config.NumberColumn("Distinct"),
             "mode": st.column_config.TextColumn("Most common"),
@@ -673,10 +688,11 @@ def _categorical_table(table: pd.DataFrame) -> None:
     )
 
 
-def _dates_table(table: pd.DataFrame) -> None:
-    """Date table."""
-    _stats_table(
+def _dates_table(table: pd.DataFrame, key: str) -> str | None:
+    """Date table. Returns the column of the selected row, or ``None``."""
+    return _stats_table(
         table,
+        key,
         {
             "min": st.column_config.DatetimeColumn("From", format="YYYY-MM-DD"),
             "max": st.column_config.DatetimeColumn("To", format="YYYY-MM-DD"),
@@ -692,10 +708,11 @@ def _dates_table(table: pd.DataFrame) -> None:
     )
 
 
-def _text_table(table: pd.DataFrame) -> None:
-    """Text and identifier table."""
-    _stats_table(
+def _text_table(table: pd.DataFrame, key: str) -> str | None:
+    """Text and identifier table. Returns the column of the selected row, or ``None``."""
+    return _stats_table(
         table,
+        key,
         {
             "semantic_type": st.column_config.TextColumn("Type"),
             "len_min": st.column_config.NumberColumn("Min length"),
@@ -710,17 +727,28 @@ def _text_table(table: pd.DataFrame) -> None:
 
 
 def _stats_table(
-    table: pd.DataFrame, column_config: dict[str, Any], column_order: list[str] | None = None
-) -> None:
-    """A per-type table: one row per column, its name pinned, sized to its rows.
+    table: pd.DataFrame,
+    key: str,
+    column_config: dict[str, Any],
+    column_order: list[str] | None = None,
+) -> str | None:
+    """A per-type table: one row per column, its name pinned, sized to its rows. One row can
+    be selected, to inspect that column.
 
     Args:
+        key: Widget key of the table, which holds the selected row.
         column_config: ``column_config`` of the measures; the name column is added here.
         column_order: Columns shown, in order. None shows every column of ``table``.
+
+    Returns:
+        The column of the selected row, or ``None`` when no row is selected.
     """
-    st.dataframe(
+    event = st.dataframe(
         table,
         hide_index=True,
+        on_select="rerun",
+        selection_mode="single-row",
+        key=key,
         column_order=column_order,
         column_config={
             _NAME_COLUMN: st.column_config.TextColumn("Column", pinned=True),
@@ -729,6 +757,15 @@ def _stats_table(
         height=_table_height(len(table)),
         row_height=_CFG.table_row_height,
     )
+    return _selected_column(table, event)
+
+
+def _selected_column(table: pd.DataFrame, event: Any) -> str | None:
+    """Name of the column in the selected row of ``table`` (``event`` of its
+    ``st.dataframe``), or ``None`` when no row is selected."""
+    if not event.selection.rows:
+        return None
+    return str(table.iloc[event.selection.rows[0]][_NAME_COLUMN])
 
 
 # Missing values
@@ -874,7 +911,8 @@ the share of different values among the non-missing ones: low means the values r
 (categories), 100% means every value is different. *Distribution* is a small chart of the
 values. Select a row to see that column in detail.
 
-**Per-type tables**: only the measures that make sense for each type.
+**Per-type tables**: only the measures that make sense for each type. Here too, select a row
+to see that column in detail.
 
 - *Numeric*: the range without outliers is the one a boxplot draws: values beyond
   {cols.TUKEY_K:g} times the IQR from the quartiles (Tukey's rule) are outliers. If the mean and the

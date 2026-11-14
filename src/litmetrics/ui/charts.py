@@ -20,6 +20,11 @@ _BOX_FILL_OPACITY = 0.35
 # Grid lines: a translucent gray that reads on a light and on a dark background, so it does not
 # depend on the mode the page had when the chart was built.
 _SPLIT_LINE = {"type": "dashed", "color": "rgba(128, 128, 128, 0.25)"}
+# Text without the outline ECharts draws around labels outside a mark (bar ends). ECharts
+# writes them in its own dark gray with a light stroke, and the "streamlit" theme does not
+# recolor them: in dark mode only the stroke could be read and the letters looked hollow.
+# Such labels get the text color of the theme (``ChartColors.emphasis``) instead.
+_NO_OUTLINE = {"textBorderWidth": 0, "textBorderColor": "transparent", "textShadowBlur": 0}
 
 
 @dataclass(frozen=True)
@@ -34,7 +39,8 @@ class ChartColors:
         median: Line and label of the median.
         mean: Line and label of the mean.
         background: Page background: border of the outlier dots, so overlapping dots separate.
-        emphasis: Border of the heatmap cell under the pointer (the text color).
+        emphasis: The text color: border of the heatmap cell under the pointer, and labels
+            outside the marks.
         diverging: Five stops for values in [-1, 1], from negative to positive. Symmetric, with
             a neutral middle that works on the page background.
     """
@@ -237,7 +243,12 @@ def hbar_options(labels: list[str], counts: list[int], colors: ChartColors) -> d
                 "type": "bar",
                 "data": counts[::-1],
                 "itemStyle": {"color": colors.accent, "borderRadius": [0, 4, 4, 0]},
-                "label": {"show": True, "position": "right"},
+                "label": {
+                    "show": True,
+                    "position": "right",
+                    "color": colors.emphasis,
+                    **_NO_OUTLINE,
+                },
             }
         ],
     }
