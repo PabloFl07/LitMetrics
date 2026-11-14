@@ -33,6 +33,11 @@ FORMAT_NAME = "Excel"
 # What one of the datasets of a workbook is called, shown to the user.
 PART_LABEL = "Sheet"
 
+# Largest workbook (bytes) whose sheets are listed with their size. Finding the size of a sheet
+# parses it whole: about 0.7 s for 1.5 M cells, which fit in roughly 8 MB of .xlsx. Above this,
+# listing the sheets would take seconds at every upload, so they are listed without it.
+_SIZES_MAX_BYTES = 10 * 1024 * 1024
+
 
 @dataclass(frozen=True)
 class ExcelOptions:
@@ -68,7 +73,8 @@ def sheet_names(source: Source) -> tuple[str, ...]:
         ReadError: The file is empty, is not a workbook, is damaged, is protected with a
             password, or has no sheets.
     """
-    return tuple(name for name, _ in _sheets(_open(source), source.name))
+    with _open(source) as workbook:
+        return tuple(name for name, _ in _sheets(workbook.book, source.name))
 
 
 def describe_sheets(source: Source) -> dict[str, str]:
@@ -76,15 +82,18 @@ def describe_sheets(source: Source) -> dict[str, str]:
 
     The description is text for the user: its rows and columns (``"1,200 rows · 8 columns"``,
     the first row being the column names), ``"empty"``, and ``"hidden"`` for hidden sheets.
-    Finding the size parses every sheet once, so this reads the whole workbook.
+    Finding the size parses every sheet once, so it is left out of workbooks larger than
+    ``_SIZES_MAX_BYTES``: their sheets are described only when hidden (``""`` otherwise).
 
     Raises:
         ReadError: The same cases as ``sheet_names``.
     """
-    workbook = _open(source)
-    return {
-        name: _describe(workbook, name, hidden) for name, hidden in _sheets(workbook, source.name)
-    }
+    sized = len(source.data) <= _SIZES_MAX_BYTES
+    with _open(source) as workbook:
+        return {
+            name: _describe(workbook.book, name, hidden, sized)
+            for name, hidden in _sheets(workbook.book, source.name)
+        }
 
 
 class ExcelLoader:
@@ -99,14 +108,16 @@ class ExcelLoader:
                 data rows.
         """
         name = source.name
-        sheets = [sheet for sheet, _ in _sheets(_open(source), name)]
-        sheet = options.sheet if options.sheet is not None else sheets[0]
-        if sheet not in sheets:
-            raise ReadError(f"'{name}' has no sheet called '{sheet}'.")
-        try:
-            df = pd.read_excel(io.BytesIO(source.data), sheet_name=sheet, engine="calamine")
-        except (calamine.CalamineError, ValueError) as e:
-            raise ReadError(f"Sheet '{sheet}' of '{name}' cannot be read: {e}") from e
+        # Opened once: the list of sheets and the sheet come from the same workbook.
+        with _open(source) as workbook:
+            sheets = [sheet for sheet, _ in _sheets(workbook.book, name)]
+            sheet = options.sheet if options.sheet is not None else sheets[0]
+            if sheet not in sheets:
+                raise ReadError(f"'{name}' has no sheet called '{sheet}'.")
+            try:
+                df = pd.read_excel(workbook, sheet_name=sheet)
+            except (calamine.CalamineError, ValueError) as e:
+                raise ReadError(f"Sheet '{sheet}' of '{name}' cannot be read: {e}") from e
         if df.empty:
             raise ReadError(f"Sheet '{sheet}' of '{name}' has no data rows.")
         df.columns = [str(column) for column in df.columns]
@@ -119,8 +130,11 @@ class ExcelLoader:
         return LoadedDataset(df, name, FORMAT_NAME, details)
 
 
-def _open(source: Source) -> calamine.CalamineWorkbook:
-    """Open the bytes of ``source`` as a workbook.
+def _open(source: Source) -> pd.ExcelFile:
+    """Open the bytes of ``source`` as a workbook. Use it as a context manager, to close it.
+
+    ``.book`` is calamine's workbook (the sheets and their metadata), and ``pd.read_excel``
+    reads a sheet from the same object without opening the file again.
 
     Raises:
         ReadError: The file is empty, is not a workbook, is damaged or has a password.
@@ -129,7 +143,7 @@ def _open(source: Source) -> calamine.CalamineWorkbook:
     if not source.data:
         raise ReadError(f"'{name}' is empty.")
     try:
-        return calamine.CalamineWorkbook.from_filelike(io.BytesIO(source.data))
+        return pd.ExcelFile(io.BytesIO(source.data), engine="calamine")
     except calamine.PasswordError as e:
         raise ReadError(f"'{name}' is protected with a password.") from e
     except calamine.CalamineError as e:
@@ -153,8 +167,13 @@ def _sheets(workbook: calamine.CalamineWorkbook, name: str) -> list[tuple[str, b
     return sorted(sheets, key=lambda sheet: sheet[1])
 
 
-def _describe(workbook: calamine.CalamineWorkbook, sheet: str, hidden: bool) -> str:
-    """Rows (without the header) and columns of ``sheet``, as text for the user."""
+def _describe(workbook: calamine.CalamineWorkbook, sheet: str, hidden: bool, sized: bool) -> str:
+    """Rows (without the header) and columns of ``sheet``, as text for the user.
+
+    Without ``sized``, only whether it is hidden: the size would mean parsing the sheet.
+    """
+    if not sized:
+        return "hidden" if hidden else ""
     try:
         cells = workbook.get_sheet_by_name(sheet)
     except calamine.CalamineError:
