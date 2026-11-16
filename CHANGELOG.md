@@ -7,6 +7,35 @@ change behavior).
 
 ## [Unreleased]
 
+### Added
+
+- **Acceptance tests**: user journeys run in a real browser against the app started with
+  `litmetrics` (Playwright), written as Given / When / Then: loading a Spanish export (cp1252,
+  `;`, decimal commas) and seeing its quality issues, switching the tables of a database from
+  the sidebar on another page, keeping the active dataset after a failed upload, going back to
+  an earlier file from the sidebar, and the correlation heatmap drawn by ECharts. They are
+  left out of a plain `pytest` run: `uv run pytest -m acceptance`. New dev dependency:
+  `pytest-playwright` (run `uv run playwright install chromium` once).
+- **Integration test of the data path**: the same survey written as CSV, Parquet, Feather,
+  SQLite and Excel must give the same schema, counts and statistics.
+- A test that checks the suite itself: every test has a docstring with `Case`, `Affects` and
+  `How`, and every test file lives in a level folder.
+
+### Changed
+
+- **Test suite reorganized** in three levels, each in its own folder and marked from it:
+  `tests/unit/` (one module, mirrors `src/litmetrics/`), `tests/integration/` (modules
+  together, pages through AppTest) and `tests/acceptance/`. `pytest -m integration` runs one
+  level.
+- Test subjects (sample files and DataFrames, file builders for each format, AppTest scripts,
+  browser helpers) moved to `tests/fixtures/`; shared pytest fixtures in `tests/conftest.py`.
+- Every test now says which bug it tries to catch, which parts of the app it touches and what
+  it does. Near-duplicate tests were merged into parametrized ones, and tests that only
+  restated the implementation were removed.
+- `AGENTS.md` has a new **Tests** section with the rules of the suite: quality over coverage,
+  integration before isolation, real objects over mocks, subjects in `tests/fixtures/` and the
+  docstring every test must have.
+
 ## [0.4.0] - 2026-11-16
 
 ### Added
