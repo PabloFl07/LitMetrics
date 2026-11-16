@@ -28,12 +28,20 @@ dev = [
     "faker>=40.43.0",
     "pre-commit>=4.7.0",
     "pytest>=9.1.1",
+    "pytest-playwright>=0.10.0",
     "ruff>=0.17.2",
 ]
 
 [tool.pytest.ini_options]
-# Shared test helpers (xlsx_builder) are imported from tests/.
+# Test subjects are imported from tests/: ``from fixtures import samples``.
 pythonpath = ["tests"]
+# importlib: test modules of different levels may share a file name.
+# Acceptance tests start the app in a browser: run them with ``pytest -m acceptance``.
+addopts = ["--import-mode=importlib", "-m", "not acceptance"]
+markers = [
+    "integration: several modules together, pages through AppTest (tests/integration/)",
+    "acceptance: user journeys in a real browser against the running app (tests/acceptance/)",
+]
 
 [tool.ruff]
 line-length = 100
