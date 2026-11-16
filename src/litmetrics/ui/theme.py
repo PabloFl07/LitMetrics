@@ -36,7 +36,7 @@ _HEX_COLOR = re.compile(r"#[0-9a-fA-F]{6}")
 _WHITE = "#FFFFFF"
 _BLACK = "#000000"
 # Share of the background mixed into the text color for secondary text. Keeps it above 4.5:1
-# in every variant (tests/ui/test_theme.py).
+# in every variant (tests/unit/ui/test_theme.py).
 _MUTED_TEXT = 0.35
 # Share of black (light mode) or white (dark mode) mixed into the accent on hover and when
 # pressed.

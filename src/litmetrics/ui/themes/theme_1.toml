@@ -7,7 +7,7 @@
 # Light: primary 600, link 700. Dark: primary #5A5FEA (between 500 and 600: white text on it
 # stays at 4.9:1), link 300. Hover, focus and active tones are derived from primaryColor in
 # src/litmetrics/ui/theme.py, so the accent changes here and nowhere else.
-# Contrast ratios (WCAG): docs/styling.md. tests/ui/test_theme.py checks them.
+# Contrast ratios (WCAG): docs/styling.md. tests/unit/ui/test_theme.py checks them.
 
 [theme]
 font = "'IBM Plex Sans':https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:wght@400;500;600&display=swap"

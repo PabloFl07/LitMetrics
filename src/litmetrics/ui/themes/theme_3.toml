@@ -11,7 +11,7 @@
 # Hover, focus and active tones are derived from primaryColor in src/litmetrics/ui/theme.py,
 # so the accent changes here and nowhere else.
 # Semantic text colors are one step darker than in variants 1 and 2: they sit on a gray page.
-# Contrast ratios (WCAG): docs/styling.md. tests/ui/test_theme.py checks them.
+# Contrast ratios (WCAG): docs/styling.md. tests/unit/ui/test_theme.py checks them.
 
 [theme]
 font = "'IBM Plex Sans':https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:wght@400;500;600&display=swap"

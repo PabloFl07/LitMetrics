@@ -41,7 +41,7 @@ class LoadConfig:
 
     # Largest file (MB) the uploader accepts. ``litmetrics`` passes it as
     # ``--server.maxUploadSize``; ``.streamlit/config.toml`` repeats it for a plain
-    # ``streamlit run`` (tests/test_cli.py checks both agree).
+    # ``streamlit run`` (tests/unit/test_cli.py checks both agree).
     max_upload_mb: int = 700
     # Rows shown in the preview table.
     preview_rows: int = 100
