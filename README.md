@@ -2,19 +2,19 @@
 
 # LitMetrics
 
-**Explore a dataset in the browser: load a CSV, analyze its data, plot it and run statistics.**
+**Explore a dataset in the browser: load a file, analyze its data, plot it and run statistics.**
 
 [![Python](https://img.shields.io/badge/python-3.14-3776AB?logo=python&logoColor=white)](https://www.python.org/)
 [![Streamlit](https://img.shields.io/badge/streamlit-1.66-FF4B4B?logo=streamlit&logoColor=white)](https://streamlit.io/)
 [![uv](https://img.shields.io/endpoint?url=https://raw.githubusercontent.com/astral-sh/uv/main/assets/badge/v0.json)](https://github.com/astral-sh/uv)
-[![Version](https://img.shields.io/badge/version-0.3.0-blue)](pyproject.toml)
+[![Version](https://img.shields.io/badge/version-0.4.0-blue)](pyproject.toml)
 
 </div>
 
 ---
 
-LitMetrics is a Streamlit app for the first look at a new dataset. Upload a CSV and it works
-out how the file is written, reads it, figures out what each column means, and shows what
+LitMetrics is a Streamlit app for the first look at a new dataset. Upload a CSV, Excel,
+Parquet, Feather or SQLite file and it works out how the file is written, reads it, figures out what each column means, and shows what
 needs attention before any analysis: missing values, duplicates, constant columns, likely
 identifiers and strongly correlated pairs.
 
@@ -33,7 +33,10 @@ header, dates and numbers stored as text, and datasets with millions of rows.
 
 ### Load
 
-- **Automatic format detection**: encoding (BOM, UTF‑8, cp1252, latin‑1), separator, decimal
+- **Many formats**: CSV, Excel and OpenDocument workbooks (`.xlsx`, `.xlsm`, `.xlsb`, `.xls`,
+  `.ods`), Parquet, Feather and SQLite databases. For workbooks and databases, pick the sheet
+  or table to read, also from the sidebar of any page.
+- **Automatic CSV format detection**: encoding (BOM, UTF‑8, cp1252, latin‑1), separator, decimal
   mark (`3.5` or `3,5`) and whether the first row is a header.
 - **Fast reading** with the pyarrow CSV engine, falling back to pandas' C engine for files
   pyarrow cannot parse.
@@ -43,6 +46,8 @@ header, dates and numbers stored as text, and datasets with millions of rows.
   datetime, boolean, text, identifier) and is converted once at load time. Dates and numbers
   stored as text become real dates and numbers; values that cannot be converted are counted.
 - **Shared cache**: a file is read once per content and read options, even across sessions.
+- **Datasets in memory**: the last datasets read are kept; switch between them from the
+  sidebar, or open and remove them from the Load page.
 
 ### Profile
 
@@ -103,7 +108,7 @@ src/litmetrics/
 ├── app.py              Page setup and top navigation
 ├── config.py           Thresholds and limits (frozen dataclasses)
 ├── core/               Pure logic, no Streamlit
-│   ├── io/             Source, loaders, format detection
+│   ├── io/             Loaders, format registry, CSV detection, datasets in memory
 │   ├── schema.py       Semantic types and column conversion
 │   ├── profile.py      Missing values, duplicates, correlation, issues
 │   ├── columns.py      Per-column tables and detail
@@ -117,6 +122,8 @@ src/litmetrics/
     ├── theme.py        Colors and fonts read from the theme
     ├── style.py        Stylesheets, page header and cards
     ├── tables.py       Rows prepared for st.dataframe
+    ├── reading.py      Reads a dataset into the session
+    ├── sidebar.py      Dataset and table switcher shown on every page
     ├── themes/         Streamlit theme of each style variant
     ├── styles/         Stylesheet of each style variant
     └── pages/          One module per page
@@ -147,5 +154,7 @@ uv run python scripts/bench_profile.py   # time Load + Profile on 3 M rows
 - [`docs/data-loading.md`](docs/data-loading.md): how a file becomes the active dataset.
 - [`docs/performance.md`](docs/performance.md): rules that keep the app fast on large data.
 - [`docs/styling.md`](docs/styling.md): themes, style variants, CSS variables and selectors.
+- [`docs/state-and-cache.md`](docs/state-and-cache.md): cache, session state and what survives
+  a reload.
 - [`CHANGELOG.md`](CHANGELOG.md): what changed in each version.
 - [`AGENTS.md`](AGENTS.md): architecture rules, conventions and commands for LLMs.

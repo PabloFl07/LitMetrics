@@ -7,6 +7,8 @@ change behavior).
 
 ## [Unreleased]
 
+## [0.4.0] - 2026-11-16
+
 ### Added
 
 - **Parquet files** (`.parquet`, `.pq`) and **Feather files** (`.feather`, `.arrow`; Feather V1
@@ -21,10 +23,10 @@ change behavior).
   (`.ods`), read with calamine. Sheets are picked like the tables of a database (list in the
   Load page, selector in the sidebar), each with its size (left out above 10 MB, where
   finding it would take seconds); hidden sheets are listed last.
-- **Close file** in the list of tables or sheets frees the open database or workbook; the
-  datasets already read from it stay in memory. **Clear cache** closes it too.
   Cells keep their type (numbers, dates, booleans), and columns that mix numbers and text are
   read as text so the schema can still find them numeric. New dependency: `python-calamine`.
+- **Close file** in the list of tables or sheets frees the open database or workbook; the
+  datasets already read from it stay in memory. **Clear cache** closes it too.
 - Formats whose files hold several datasets declare them in `core/io/formats.py`
   (`FileFormat.parts`); the Load page shows the selector without knowing the format, ready
   for Excel sheets or other multi-dataset formats.
@@ -42,9 +44,15 @@ change behavior).
   an Open button. The title of the list shows the open table, also while it is collapsed.
 - While a table of a database is the active dataset, the sidebar has a **Table** selector
   below the dataset one, to switch table from any page.
+- The per-type tables of the Columns tab (Numeric, Categorical, Dates, Text) open the
+  inspector of the column in the selected row, like the overview.
+- `docs/state-and-cache.md`: cache, session state and what survives a reload.
 
 ### Changed
 
+- The correlation heatmap shows the numbers in its cells for any number of columns (smaller
+  as the cells shrink), and from 13 columns it takes the whole width, with the strongest pairs
+  below it.
 - The datasets read are kept in a library of their own (`core/io/library.py`) instead of a
   `st.cache_resource` function cache, so they can be listed and removed. The least recently
   used one is dropped first. Two tabs reading the same file at the same moment may now read
@@ -52,6 +60,8 @@ change behavior).
 
 ### Fixed
 
+- In dark mode, the numbers at the end of horizontal bars looked hollow (only their outline
+  could be read); they now take the text color of the theme.
 - Time-of-day columns (`09:30`, `17:05:10`) were taken for dates: Excel time cells lost
   every value, and text times in CSV, Parquet and Feather files were dated today. They are
   now text.
@@ -139,6 +149,8 @@ change behavior).
 
 - Project structure: Streamlit app with top navigation, uv, ruff, pre-commit and pytest.
 
+[Unreleased]: https://github.com/PabloFl07/LitMetrics/compare/v0.4.0...HEAD
+[0.4.0]: https://github.com/PabloFl07/LitMetrics/compare/v0.3.0...v0.4.0
 [0.3.0]: https://github.com/PabloFl07/LitMetrics/compare/v0.2.0...v0.3.0
 [0.2.0]: https://github.com/PabloFl07/LitMetrics/releases/tag/v0.2.0
 [0.1.0]: https://github.com/PabloFl07/LitMetrics/commit/39f9997
