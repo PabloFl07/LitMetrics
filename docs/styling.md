@@ -175,7 +175,7 @@ skill and look at every variant.
 
 ## Accessibility
 
-`tests/ui/test_theme.py` checks WCAG AA in both modes for every variant except 4 (the original,
+`tests/unit/ui/test_theme.py` checks WCAG AA in both modes for every variant except 4 (the original,
 kept as it was):
 
 - Text, muted text and links: at least 4.5:1 on the page and on surfaces.

@@ -12,7 +12,10 @@ stubs. Statistics has no page yet.
 uv sync                                       # install (Python 3.14, deps pinned in uv.lock)
 uv run litmetrics                             # run the app (args go to streamlit run)
 uv run litmetrics --style 2                   # run it with style variant 2 (docs/styling.md)
-uv run pytest -q                              # all tests (~5 s)
+uv run pytest -q                              # unit + integration tests (~15 s)
+uv run pytest -m integration -q               # one level only (unit: -m "not integration")
+uv run pytest -m acceptance -q                # user journeys in a headless browser (~30 s)
+uv run playwright install chromium            # once, and after updating playwright
 uv run ruff format src tests                  # format
 uv run ruff check src tests                   # lint
 uv run python scripts/bench_profile.py        # time Load + Profile on 3 M rows (docs/performance.md)
@@ -62,8 +65,13 @@ src/litmetrics/
       styles_base.css Rules shared by style variants 0-3, loaded before the variant's own
       styles.css      CSS of style variant 0; styles_<n>.css of variant n
     pages/          One module per page
-tests/core/       pytest, mirrors src/litmetrics/core
-tests/ui/         AppTest smoke tests of the pages and tests of ui/charts.py
+tests/            Levels and rules in "Tests" below
+  conftest.py       Shared fixtures; marks each test with the level of its folder
+  fixtures/         Test subjects: samples.py (named data), files.py (file bytes per format),
+                    xlsx_builder.py, app_scripts.py (AppTest scripts), browser.py (Playwright)
+  unit/             One module at a time, mirrors src/litmetrics/ (core/, ui/, test_cli.py)
+  integration/      Modules together: file -> profile, pages and sidebar through AppTest
+  acceptance/       User journeys in a real browser against ``litmetrics`` (Playwright)
 scripts/          bench_profile.py: benchmark of Load and Profile
 docs/             Reference docs: data-loading.md (Load flow), performance.md (rules R-*),
                   styling.md (themes, variants, CSS selectors), state-and-cache.md (cache,
@@ -118,6 +126,49 @@ drafts/           Design notes and plans (Spanish). Intent, not truth: the code 
   before replacing working UI with an extra, and let them choose when several extras fit.
   Deprecated extras are never used.
 
+## Tests
+
+- **Quality over quantity.** A test earns its place by catching a bug that could realistically
+  happen. Before writing one, name that bug. Do not write tests that restate the implementation,
+  assert what a mock was told to return, or only exist to touch lines.
+- **Coverage is not a goal.** It shows code no test runs; it does not show that the code is
+  checked. Never add a test just to raise it, and never judge the suite by it.
+- **Integration before isolation.** Prefer exercising real pieces together (real bytes on disk ->
+  loader -> schema -> profile; a page with its real state and cache) over testing each function
+  alone. Unit tests are for logic with many edge cases (sniffing, type inference, statistics).
+- **Three levels**, each in its own folder:
+  - `tests/unit/`: one module, no Streamlit runtime. Mirrors `src/litmetrics/`.
+  - `tests/integration/`: several modules together, including pages through `AppTest`.
+  - `tests/acceptance/`: user journeys (Load -> Profile -> ...) seen from the user's side,
+    against the running app. Written as Given / When / Then. Marked `acceptance`; slower, run
+    on their own.
+- **Test subjects live in `tests/fixtures/`**: data files, builders (``xlsx_builder``), DataFrame
+  factories, fakes and stubs. Shared pytest fixtures are declared in `tests/conftest.py` and
+  take their data from there. Only a few literal values that *are* the case being shown (a
+  3-row DataFrame whose values the assertion reads) may stay inline in the test.
+- **Real objects over mocks.** Use real files in `tmp_path`, real SQLite databases, real
+  DataFrames. Fake only what is slow, random or external, and keep the fake in
+  `tests/fixtures/fakes.py`. Never mock the module under test.
+- **Every test is explained**, with no exception. Each test module has a docstring saying what it
+  covers and at which level. Each test function has this docstring:
+
+  ```python
+  def test_semicolon_csv_with_decimal_comma_loads_floats():
+      """A European CSV keeps its numbers as numbers.
+
+      Case: sniffing takes ``,`` as the separator and the floats become text columns.
+      Affects: core/io/sniffing.py, core/io/csv_loader.py, core/schema.py
+      How: loads ``fixtures/data/european.csv`` and checks the dtype and value of ``price``.
+      """
+  ```
+
+  First line: the behavior that must hold. `Case`: the bug or situation it tries to uncover.
+  `Affects`: the modules, functions or pages it exercises. `How`: what the test does. Shared
+  fixtures and builders get a docstring saying what the subject contains and why.
+- One behavior per test, named after it (`test_range_drops_outliers`, not `test_range_2`). Group
+  close variants with `pytest.mark.parametrize` and give each case an `id`.
+- Edge cases first: empty data, missing values, constant columns, no header, cp1252 / UTF-8 BOM.
+
 ## Style
 
 - Code, comments, docstrings and UI text in English.
@@ -143,7 +194,7 @@ drafts/           Design notes and plans (Spanish). Intent, not truth: the code 
 - `st.components.v1.html` is deprecated: use `st.iframe`.
 - `streamlit_echarts` (0.7) cannot even be imported outside a running Streamlit app (not even
   `JsCode`), so `litmetrics.ui.pages.profile` cannot be imported from plain pytest. Test pages
-  through `AppTest` (see `tests/ui/`), and test `ui/charts.py` builders directly. JavaScript
+  through `AppTest` (see `tests/integration/`), and test `ui/charts.py` builders directly. JavaScript
   callbacks in builders would need a `Js` marker converted to `JsCode` in `ui/echarts.py`: no
   builder has one yet, so neither exists. The `add-chart` skill has the code to add them.
 - AppTest does not run the chart's JavaScript: selection and chart events are only testable in

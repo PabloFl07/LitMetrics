@@ -559,20 +559,20 @@ See the `add-loader` skill for the full checklist. In short:
    with a user-facing message for every expected failure, and fills `format` and `details`.
 3. A `FileFormat` entry in `formats.FORMATS`, and its options class added to
    `formats.ReadOptions`. The cache and the uploader pick it up from there.
-4. Tests in `tests/core/io/`.
+4. Tests in `tests/unit/core/io/`.
 
 ## Tests
 
-`tests/core/io/test_csv_loader.py` covers `CsvLoader`: dtypes, files without a header, cp1252
+`tests/unit/core/io/test_csv_loader.py` covers `CsvLoader`: dtypes, files without a header, cp1252
 with `;`, UTF‑8 with BOM, empty values, decimal commas, the fallback from pyarrow to the C
-engine on ragged rows, and every `ReadError` message. `tests/core/io/test_sqlite_loader.py` covers tables, views, quoted names, BLOBs and every
-`ReadError` of the SQLite loader. `tests/core/io/test_excel_loader.py` covers sheet order,
+engine on ragged rows, and every `ReadError` message. `tests/unit/core/io/test_sqlite_loader.py` covers tables, views, quoted names, BLOBs and every
+`ReadError` of the SQLite loader. `tests/unit/core/io/test_excel_loader.py` covers sheet order,
 hidden and empty sheets, types, mixed columns and every `ReadError`; its workbooks are built
-in memory by `tests/xlsx_builder.py` (no Excel writer library needed). `tests/core/io/test_parquet_loader.py` and
+in memory by `tests/fixtures/xlsx_builder.py` (no Excel writer library needed). `tests/unit/core/io/test_parquet_loader.py` and
 `test_feather_loader.py` cover types, row groups, compression, Feather V1 and every
 `ReadError`; `test_arrow_table.py` covers each type conversion, the restored index and
-repeated column names. `tests/core/io/test_formats.py` covers choosing the format
-by extension, choosing the loader by the options, and that `ReadOptions` lists every format. `tests/core/io/test_sniffing.py` covers the detection: header, separator, encoding (including a character split between two chunks
+repeated column names. `tests/unit/core/io/test_formats.py` covers choosing the format
+by extension, choosing the loader by the options, and that `ReadOptions` lists every format. `tests/unit/core/io/test_sniffing.py` covers the detection: header, separator, encoding (including a character split between two chunks
 and a cp1252 byte at the end) and decimal mark. Column typing is tested in
-`tests/core/test_schema.py`, and the Load page in `tests/ui/test_pages_smoke.py` (including
+`tests/unit/core/test_schema.py`, and the Load page in `tests/integration/test_load_page.py` (including
 that a failed upload is read only once).
