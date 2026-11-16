@@ -20,6 +20,12 @@ change behavior).
   SQLite and Excel must give the same schema, counts and statistics.
 - A test that checks the suite itself: every test has a docstring with `Case`, `Affects` and
   `How`, and every test file lives in a level folder.
+- **Continuous integration** with GitHub Actions (`.github/workflows/ci.yaml`), on every push
+  to `main` and `dev` or run by hand from the Actions tab. Three jobs: **lint** (the same
+  pre-commit hooks as locally, on all files), **unit + integration** (`pytest`) and
+  **acceptance** (Playwright with Chromium, only once the other tests pass; Playwright traces
+  of a failed run are kept for 7 days). Dependencies are installed from `uv.lock`
+  (`uv sync --locked`), and a new push to the same branch cancels the run still in progress.
 
 ### Changed
 
