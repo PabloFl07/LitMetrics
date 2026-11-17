@@ -6,14 +6,17 @@ the rules about what is cleared when the dataset changes live in one place.
 State kept per browser session:
     dataset     The active ``LoadedDataset``, or None.
     dataset_id  Content hash of the active dataset (see ``compute_dataset_id``).
-    source_id   Id of the last read that was processed (an upload, plus the part read for files
-                with several datasets), to skip it on later reruns.
+    upload_id   Id of the last upload of the Load page that was processed (Streamlit's
+                ``file_id``), so the file still in the uploader is not read again on reruns.
+    source_id   Id of the last read that was done (an upload, or the upload plus the part read
+                for files with several datasets), to skip it on later reruns.
     read_error  Reads that could not be done: read id -> message. One per read, so two failed
                 reads (a broken upload and an empty table) do not overwrite each other and
                 both stay unread.
     multipart   The active file with several datasets (``Source``, ``Parts``), or None. Its
                 bytes stay in the session so another dataset can be read after the uploader
-                forgot the file (it does when the user visits another page).
+                forgot the file (it does when the user visits another page). Opening one of
+                its datasets from memory opens it again (``reopen_multipart``).
     part        Dataset of that file picked by the user (None: the first one).
     part_ids    Datasets of that file read in this session: dataset id -> name of the part.
                 Tells which part the active dataset is, even with another version of a file
@@ -38,6 +41,7 @@ from litmetrics.core.schema import Schema
 
 _DATASET = "dataset"
 _DATASET_ID = "dataset_id"
+_UPLOAD_ID = "upload_id"
 _SOURCE_ID = "source_id"
 _READ_ERROR = "read_error"
 _SCHEMA = "schema"
@@ -77,6 +81,7 @@ def _defaults() -> dict[str, Any]:
     return {
         _DATASET: None,
         _DATASET_ID: None,
+        _UPLOAD_ID: None,
         _SOURCE_ID: None,
         _READ_ERROR: {},
         _MULTIPART: None,
@@ -88,6 +93,25 @@ def _defaults() -> dict[str, Any]:
 
 
 # Dataset: changing it (used by the load page)
+
+
+def upload_changed(upload_id: str) -> bool:
+    """Whether upload ``upload_id`` (the file in the uploader) was not processed yet.
+
+    Kept apart from the reads (``source_changed``): reading a table, or opening a dataset
+    from memory, must not make the file still in the uploader look new and be read again.
+    """
+    return st.session_state[_UPLOAD_ID] != upload_id
+
+
+def mark_upload(upload_id: str) -> None:
+    """Record that upload ``upload_id`` was processed (read, listed, or failed)."""
+    st.session_state[_UPLOAD_ID] = upload_id
+
+
+def mark_read(source_id: str) -> None:
+    """Record read ``source_id`` as done without reading: its dataset is already active."""
+    st.session_state[_SOURCE_ID] = source_id
 
 
 def source_changed(source_id: str) -> bool:
@@ -118,9 +142,9 @@ def set_dataset(dataset: LoadedDataset, dataset_id: str, source_id: str) -> bool
 def switch_dataset(dataset: LoadedDataset, dataset_id: str, schema: Schema) -> None:
     """Make a dataset kept in memory the active one, without reading any file.
 
-    ``source_id`` is kept: the file still in the uploader stays processed, so it is not read
-    again and does not take the place of the dataset chosen. Does nothing if it is already
-    active.
+    ``source_id`` is kept: the last read stays done, so ``reading.read_chosen_part`` does not
+    read the table picked again and take the place of the dataset chosen. Does nothing if it
+    is already active.
     """
     if st.session_state[_DATASET_ID] == dataset_id:
         return
@@ -133,7 +157,7 @@ def switch_dataset(dataset: LoadedDataset, dataset_id: str, schema: Schema) -> N
 def clear_dataset() -> None:
     """Leave the session with no active dataset (it was dropped from memory).
 
-    ``source_id`` is kept, so the file still in the uploader is not read again.
+    The upload stays processed, so the file still in the uploader is not read again.
     """
     _reset_dependent_state()
     st.session_state[_DATASET] = None
@@ -185,12 +209,27 @@ def close_multipart() -> None:
 
     Its upload is marked as processed: if the file is still in the uploader, it is not listed
     and read again (which would open it back). The active dataset, if it is one of its
-    datasets, stays: it is kept in memory without the file.
+    datasets, stays. The datasets read from it still keep the file in memory
+    (``LibraryEntry.file``): it is freed when they leave it.
     """
     if (multipart := st.session_state[_MULTIPART]) is None:
         return
-    st.session_state[_SOURCE_ID] = multipart[0].source_id
+    mark_upload(multipart[0].source_id)
     clear_multipart()
+
+
+def reopen_multipart(source: Source, parts: Parts, part: str, dataset_id: str) -> None:
+    """Open again ``source``, kept in memory with dataset ``dataset_id`` (its part ``part``).
+
+    The file becomes the active file with several, with ``part`` picked. The parts already
+    known stay when it is the file already open (the same upload).
+    """
+    current = st.session_state[_MULTIPART]
+    if current is None or current[0].source_id != source.source_id:
+        st.session_state[_PART_IDS] = {}
+    st.session_state[_MULTIPART] = (source, parts)
+    st.session_state[_PART] = part
+    set_part_id(part, dataset_id)
 
 
 def get_part() -> str | None:
@@ -217,7 +256,7 @@ def choose_part(name: str) -> None:
 
     The last read is forgotten, so the dataset is read even if it was the last one read (the
     user may have switched to another dataset since): the read is a cache hit. The upload
-    itself is not read again: it is recognized as the file already kept.
+    itself is not read again: it has its own marker (``upload_changed``).
     """
     st.session_state[_PART] = name
     st.session_state[_SOURCE_ID] = None

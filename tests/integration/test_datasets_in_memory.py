@@ -241,6 +241,31 @@ def test_sidebar_hides_tables_when_a_dataset_of_another_file_is_active():
     assert len(at.sidebar.selectbox) == 1
 
 
+def test_table_opened_from_memory_brings_back_its_tables():
+    """A table opened from memory, after another file was read, comes back with its tables.
+
+    Case: the database is forgotten when a CSV replaces it, so its table reopened from memory
+    has no table selector; or, with it back, picking another table makes the CSV still in the
+    uploader look new, and it is read again over the table picked.
+    Affects: ui/sidebar.py (_on_switch, _part_switcher), ui/reading.py (open_kept),
+    ui/state.py (reopen_multipart, upload_changed), ui/cache.py (load_dataset)
+    How: uploads ``TOWN_DB`` then ``CSV_A`` (left in the uploader), switches back to
+    ``town.db / cities`` in the sidebar, then picks ``people`` there.
+    """
+    at = upload(start_app(), "town.db", samples.TOWN_DB)
+    upload(at, "first.csv", samples.CSV_A)
+    at.sidebar.selectbox[0].select("town.db / cities").run()
+    assert not at.exception, errors(at)
+    tables = at.sidebar.selectbox[1]
+    assert (tables.label, tables.value) == ("Table", "cities")
+    assert parts_expander(at).label == "Table: cities"
+    at.sidebar.selectbox[1].select("people").run()
+    assert not at.exception, errors(at)
+    # 60 rows: ``people``, not the 10 of the CSV read again.
+    assert at.session_state["dataset"].n_rows == 60
+    assert parts_expander(at).label == "Table: people"
+
+
 def test_excel_sheets_are_listed_and_switched_like_tables():
     """The sheets of a workbook behave like the tables of a database.
 

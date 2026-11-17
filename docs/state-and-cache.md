@@ -17,7 +17,7 @@ model as a whole: what lives where, how long it lives, and who can see it.
 │                                                                          │
 │   st.cache_resource ─► DatasetLibrary (core/io/library.py)               │
 │                          dataset_id ─► LibraryEntry(dataset, schema,     │
-│                                                     part, loaded_at)     │
+│                                               part, loaded_at, file)     │
 │                          LRU, LoadConfig.cache_max_datasets (5)          │
 │                                                                          │
 │   st.cache_data ─────► Profile results (aggregates), keyed by dataset_id │
@@ -131,6 +131,7 @@ rerun from `app.py` and fills only the missing keys.
 |---|---|---|
 | `dataset` | Active `LoadedDataset` (a reference to the library's object) | `None` |
 | `dataset_id` | Its `dataset_id` | `None` |
+| `upload_id` | Last upload of the Load page processed (`file_id`) | `None` |
 | `source_id` | Last read processed (`read_id`) | `None` |
 | `read_error` | `(read_id, message)` of the last read that failed | `None` |
 | `multipart` | File with several datasets: `(Source, Parts)`, its bytes included | `None` |
@@ -149,13 +150,14 @@ There are three ways in, and all of them clear the dependent state (`schema`,
 | Function | Called from | Reads a file? | `source_id` |
 |---|---|---|---|
 | `set_dataset(dataset, id, source_id)` | `reading.read` (upload, table picked) | Yes (or a cache hit) | Set to the read |
-| `switch_dataset(dataset, id, schema)` | Sidebar selector, Load → "Open" | No: taken from the library | Kept |
+| `switch_dataset(dataset, id, schema)` | `reading.open_kept` (sidebar selector, Load → "Open") | No: taken from the library | Kept (a table: set to its read, its file reopened) |
 | `clear_dataset()` | Load → "Remove" / "Clear cache" | No | Kept |
 
 `set_dataset` and `switch_dataset` do nothing beyond `source_id` when the id is already the
 active one, so uploading the same file again keeps the schema, the skipped columns and the
-widget choices. `switch_dataset` and `clear_dataset` keep `source_id` so the file still in the
-uploader is not read again and does not replace the dataset the user just picked.
+widget choices. `switch_dataset` and `clear_dataset` keep `source_id` so the table picked is
+not read again over the dataset the user just picked; the file still in the uploader has its
+own marker (`upload_id`), so it is not read again either.
 
 ### Widgets
 
@@ -192,7 +194,7 @@ Reloading the page (F5, opening the URL again, a new tab) starts a **new Streaml
 | Schema | No, but it comes back | Stored in the `LibraryEntry`; restored by `switch_dataset` |
 | Skipped columns, open tab, selected method, other `w_*` widgets | No | Session state; they start from their defaults |
 | File in the uploader | No | The browser forgets it |
-| File with several datasets (`multipart`, its bytes, `part`) | No | Session state. Tables already read are still in the library (`file / table`); the others need the file again |
+| File with several datasets (`multipart`, its bytes, `part`) | No, but it comes back | Its tables read are still in the library (`file / table`) with the file (`LibraryEntry.file`, up to `LoadConfig.keep_file_max_mb`): opening one reopens the file and its table selector |
 | Remembered read error | No | The file is no longer in the uploader anyway |
 
 So after a reload the user lands on the same page with no active dataset (the Profile page

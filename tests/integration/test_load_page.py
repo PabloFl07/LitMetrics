@@ -237,13 +237,14 @@ def test_csv_upload_replaces_the_table_list():
 
 
 def test_older_version_of_a_file_is_not_taken_for_a_table_of_the_new_one():
-    """A dataset of an older version of a file is not marked as a table of the new version.
+    """Opening a table of an older version of a file opens that version, not the new one.
 
-    Case: matching by file and table name, the old ``a`` is shown as the active table of the
-    new file (whose ``a`` has other rows).
-    Affects: ui/pages/load.py, ui/reading.py (active_part), ui/state.py (multipart)
+    Case: matching by file and table name, the old ``a`` is shown as a table of the new file
+    (whose ``a`` has other rows), and picking ``b`` then reads the new file's ``b``.
+    Affects: ui/pages/load.py (_open_cached), ui/reading.py (open_kept, active_part),
+    ui/state.py (reopen_multipart)
     How: uploads two versions of ``data.db`` (3 and 5 rows), opens the older one from memory,
-    and checks no table of the new file is active.
+    and checks the file open again is the older one, with ``a`` active.
     """
     at = upload(start_app(), "data.db", samples.versioned_db(3))
     upload(at, "data.db", samples.versioned_db(5))
@@ -251,8 +252,9 @@ def test_older_version_of_a_file_is_not_taken_for_a_table_of_the_new_one():
     older.click().run()
     assert not at.exception, errors(at)
     assert at.session_state["dataset"].n_rows == 3
-    assert [b.disabled for b in buttons(at, "open_part")] == [False, False]
-    assert len(at.sidebar.selectbox) == 1
+    assert at.session_state["multipart"][0].data == samples.versioned_db(3)
+    assert [b.disabled for b in buttons(at, "open_part")] == [True, False]
+    assert at.sidebar.selectbox[1].value == "a"
 
 
 def test_close_file_frees_it_and_keeps_the_dataset():

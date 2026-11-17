@@ -10,7 +10,7 @@ plus the parts of `ui/state.py` and `ui/cache.py` that keep the dataset.
 st.file_uploader
       │  UploadedFile (file_id)
       ▼
-state.source_changed? ──no──► (nothing to do: draw the active dataset)
+state.upload_changed? ──no──► (nothing to do: draw the active dataset)
               │ yes
               ▼
 state.get_read_error? ──yes──► st.error (the remembered message; nothing is read)
@@ -406,12 +406,18 @@ file only read it once. Rules R-C1 to R-C6 in `docs/performance.md` explain the 
   DataFrame once, when it is created (`memory_bytes`, `memory_usage(deep=True)`): the list
   shows it per dataset and in all. The Load page lists them to open one again, remove one or
   clear the cache; the sidebar (`ui/sidebar.py`) switches between them from any page. Both use
-  `state.switch_dataset`, which keeps `source_id` so the file still in the uploader is not read
-  again and does not replace the chosen dataset.
+  `reading.open_kept` (`state.switch_dataset`), which keeps `source_id`, and the uploader has
+  its own marker (`upload_id`), so the file still in the uploader is not read again and does
+  not replace the chosen dataset.
 - The bytes of an open database or workbook stay in the session (`multipart`) so its other
-  tables can be read. **Close file** in its list, and **Clear cache**, free them with
+  tables can be read. Each table read from it also keeps the file in the library
+  (`LibraryEntry.file`, the same object for all its tables, counted once in `cached_bytes()`)
+  if it is at most `LoadConfig.keep_file_max_mb` (200 MB): opening that table from memory
+  opens the file again (`state.reopen_multipart`), so its table selector comes back even
+  after another file was read or the page was reloaded. The bytes are freed when the last of
+  its tables leaves the library. **Close file** in its list closes it with
   `state.close_multipart`, which marks its upload as processed: a file still in the uploader
-  is not opened again. The datasets already read from it stay in memory.
+  is not opened again.
 - Names from the user's files (file, table, sheet, column names) drawn as Markdown go through
   `ui/text.md`, which escapes what Markdown or Streamlit would read (`*draft*`, `$5$`,
   `:red[x]`).
@@ -464,9 +470,10 @@ when the dataset changes live in one place.
 |---|---|---|
 | `dataset` | Active `LoadedDataset` or `None` | New content; switching to a kept dataset; `None` when removed from memory |
 | `dataset_id` | Content hash of the active dataset | Same as `dataset` |
+| `upload_id` | Last upload of the Load page processed (`file_id`) | Every processed upload |
 | `source_id` | Last read that was processed (`read_id`: upload, plus part) | Every processed read |
 | `read_error` | Reads (or listings of parts) that failed: read id -> message, one per read | Never: each read is tried once |
-| `multipart` | Active file with several datasets: its `Source` (bytes kept) and `Parts` | New upload with parts; cleared when a single-dataset file is read |
+| `multipart` | Active file with several datasets: its `Source` (bytes kept) and `Parts` | New upload with parts; cleared when a single-dataset file is read; set again when one of its tables is opened from memory |
 | `part` | Dataset of that file picked by the user (`None`: the first one) | New upload with parts |
 | `part_ids` | Datasets of that file read in this session: dataset id -> part | New upload with parts |
 | `schema` | `Schema` of the active dataset | New content |
@@ -478,7 +485,11 @@ Functions:
 
 - `init_state()`: called from `app.py` on every rerun. Fills missing keys with their defaults
   and keeps existing values.
-- `source_changed(source_id)`: the cheap check done on every rerun.
+- `upload_changed(upload_id)`, `mark_upload(upload_id)`: whether the file in the uploader
+  was processed. Apart from the reads, so reading a table or opening a dataset from memory
+  never makes the upload look new.
+- `source_changed(source_id)`, `mark_read(source_id)`: the cheap check done on every rerun
+  before reading the table picked.
 - `set_dataset(dataset, dataset_id, source_id)`: always marks the upload as processed. If
   `dataset_id` equals the active one it returns `False` and changes nothing else, so uploading
   the same file again keeps the schema and the user's widget choices. Otherwise it clears the
@@ -500,7 +511,8 @@ Functions:
   the last one read and the user switched to another since. `set_part_id(name, dataset_id)`
   and `part_of(dataset_id)`: which part each dataset read from the file is, so the lists know
   the active table. Kept per file, not looked up by file name: an older version of a file of
-  the same name, opened from memory, is not taken for a table of the new one.
+  the same name, opened from memory, opens its own file again (`reopen_multipart`), not the
+  new one.
 - `widget_key(name)`: returns `"w_" + name`. Any widget whose options depend on the columns
   must use `key=state.widget_key(...)`, so a new dataset does not leave it pointing at columns
   that no longer exist.

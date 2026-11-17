@@ -49,6 +49,10 @@ class LoadConfig:
     preview_height: int = 500
     # Datasets kept in memory by each cached function (shared by all sessions).
     cache_max_datasets: int = 5
+    # Largest file with several datasets (MB) whose bytes are kept with its datasets in
+    # memory, so opening one of them again offers the others (the sidebar table selector).
+    # A larger file is only kept while it is open: its other tables need the upload again.
+    keep_file_max_mb: int = 200
 
 
 @dataclass(frozen=True)

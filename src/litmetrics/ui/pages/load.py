@@ -74,11 +74,11 @@ def _load(uploaded: UploadedFile) -> None:
     """
     source_id = uploaded.file_id
     # Checked before ``getvalue``, which copies the whole file on every call.
-    if not state.source_changed(source_id) or _is_active_multipart(source_id):
+    if not state.upload_changed(source_id):
+        if (error := state.get_read_error(source_id)) is not None:
+            st.error(error)
         return
-    if (error := state.get_read_error(source_id)) is not None:
-        st.error(error)
-        return
+    state.mark_upload(source_id)
     source = _source(uploaded)
     try:
         parts = formats.list_parts(source)
@@ -93,12 +93,6 @@ def _load(uploaded: UploadedFile) -> None:
     else:
         # A file of one dataset replaces the file with several: its list goes away.
         state.clear_multipart()
-
-
-def _is_active_multipart(source_id: str) -> bool:
-    """Whether upload ``source_id`` is the file with several datasets already kept."""
-    multipart = state.get_multipart()
-    return multipart is not None and multipart[0].source_id == source_id
 
 
 def _source(uploaded: UploadedFile) -> Source:
@@ -182,7 +176,7 @@ def _open_cached(dataset_id: str) -> None:
     if entry is None:
         st.toast("That dataset is no longer in memory. Upload the file again.")
         return
-    state.switch_dataset(entry.dataset, entry.dataset_id, entry.schema)
+    reading.open_kept(entry)
 
 
 def _remove_cached(dataset_id: str) -> None:
@@ -280,8 +274,8 @@ def _parts() -> bool:
             icon=":material/close:",
             key="close_file",
             on_click=state.close_multipart,
-            help=f"Free the memory of {text.md(source.name)}. The {parts.label.lower()}s "
-            "already read stay in memory; to read another, upload the file again.",
+            help=f"Close {text.md(source.name)}. The {parts.label.lower()}s already read stay "
+            "in memory, and opening one of them opens the file again while it is kept.",
         )
     return True
 

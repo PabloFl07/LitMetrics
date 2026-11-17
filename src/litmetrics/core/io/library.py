@@ -12,8 +12,12 @@ from collections import OrderedDict
 from dataclasses import dataclass
 from datetime import datetime
 
-from litmetrics.core.io.base import LoadedDataset
+from litmetrics.core.io.base import LoadedDataset, Source
+from litmetrics.core.io.formats import Parts
 from litmetrics.core.schema import Schema
+
+# A file with several datasets (a database) and its datasets: what reading another one needs.
+type MultipartFile = tuple[Source, Parts]
 
 
 @dataclass(frozen=True, eq=False)
@@ -28,6 +32,9 @@ class LibraryEntry:
         loaded_at: When it was read.
         memory_bytes: Memory its DataFrame takes (``memory_usage(deep=True)``), measured
             once by ``create``: deep counts the text of object columns, value by value.
+        file: For a dataset of a file with several, that file (its bytes included) and its
+            datasets, so opening the dataset again can offer the others; None when not kept.
+            The datasets of one file share the same objects: the bytes are kept once.
     """
 
     dataset_id: str
@@ -36,6 +43,7 @@ class LibraryEntry:
     part: str | None
     loaded_at: datetime
     memory_bytes: int
+    file: MultipartFile | None = None
 
     @classmethod
     def create(
@@ -45,10 +53,11 @@ class LibraryEntry:
         schema: Schema,
         part: str | None,
         loaded_at: datetime,
+        file: MultipartFile | None = None,
     ) -> LibraryEntry:
         """Entry for ``dataset``, with the memory it takes measured now."""
         memory = int(dataset.df.memory_usage(deep=True).sum())
-        return cls(dataset_id, dataset, schema, part, loaded_at, memory)
+        return cls(dataset_id, dataset, schema, part, loaded_at, memory, file)
 
     @property
     def label(self) -> str:
@@ -97,9 +106,16 @@ class DatasetLibrary:
             return tuple(reversed(self._entries.values()))
 
     def total_bytes(self) -> int:
-        """Memory taken by the DataFrames of every entry (``LibraryEntry.memory_bytes``)."""
+        """Memory taken by every entry: its DataFrame, plus each file kept counted once.
+
+        A file is kept by every dataset read from it (``LibraryEntry.file``), as one object:
+        it is freed when the last of them is dropped.
+        """
         with self._lock:
-            return sum(entry.memory_bytes for entry in self._entries.values())
+            frames = sum(entry.memory_bytes for entry in self._entries.values())
+            # By identity: the same upload is one object; another upload is another copy.
+            files = {id(e.file[0]): len(e.file[0].data) for e in self._entries.values() if e.file}
+            return frames + sum(files.values())
 
     def remove(self, dataset_id: str) -> bool:
         """Forget ``dataset_id``. Return whether it was kept."""

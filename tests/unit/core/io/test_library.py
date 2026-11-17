@@ -9,7 +9,8 @@ from datetime import datetime
 import pandas as pd
 import pytest
 
-from litmetrics.core.io.base import LoadedDataset
+from litmetrics.core.io.base import LoadedDataset, Source
+from litmetrics.core.io.formats import Parts
 from litmetrics.core.io.library import DatasetLibrary, LibraryEntry
 from litmetrics.core.schema import Schema
 
@@ -160,3 +161,26 @@ def test_memory_of_an_entry_and_in_all():
     assert library.total_bytes() == 2 * entry.memory_bytes
     library.remove("a")
     assert library.total_bytes() == entry.memory_bytes
+
+
+def test_file_kept_by_several_tables_is_counted_once():
+    """The bytes of a file kept by several of its tables count once, until the last goes.
+
+    Case: the memory shown adds the database once per table read from it (they share one
+    object), or forgets it while a table still keeps it.
+    Affects: core/io/library.py (LibraryEntry.file, total_bytes)
+    How: puts two tables of one 1,000-byte file, then removes them one by one.
+    """
+    file = (Source(b"x" * 1000, "data.db", "u1"), Parts("Table", ("t1", "t2")))
+    dataset = LoadedDataset(pd.DataFrame({"a": [1, 2]}), "data.db", "SQLite")
+    library = DatasetLibrary(3)
+    for name in ("t1", "t2"):
+        library.put(
+            LibraryEntry.create(name, dataset, Schema(()), name, datetime(2026, 1, 1), file)
+        )
+    frame = library.get("t1").memory_bytes
+    assert library.total_bytes() == 2 * frame + 1000
+    library.remove("t1")
+    assert library.total_bytes() == frame + 1000
+    library.remove("t2")
+    assert library.total_bytes() == 0

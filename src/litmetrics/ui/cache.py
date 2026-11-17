@@ -40,6 +40,8 @@ from litmetrics.core.schema import Schema, SemanticType, prepare_dataset
 
 _PROFILE_MAX = ProfileConfig.cache_max_datasets
 _WORKERS = ProfileConfig.workers
+# Largest file (bytes) kept with its datasets in the library (``load_dataset``).
+_KEEP_FILE_BYTES = LoadConfig.keep_file_max_mb * 1024 * 1024
 
 
 def view_id(dataset_id: str, skipped: Iterable[str]) -> str:
@@ -65,12 +67,18 @@ def _library() -> DatasetLibrary:
 
 
 def load_dataset(
-    dataset_id: str, _source: Source, options: formats.ReadOptions, part: str | None = None
+    dataset_id: str,
+    _source: Source,
+    options: formats.ReadOptions,
+    part: str | None = None,
+    _parts: formats.Parts | None = None,
 ) -> tuple[LoadedDataset, Schema]:
     """Parse ``_source`` with ``options`` and type its columns, once per ``dataset_id``.
 
     ``options`` are the read options of the file (``formats.detect_options``), and choose the
-    loader. ``part`` is the dataset of a file with several, only to name it in the library.
+    loader. ``part`` is the dataset of a file with several, to name it in the library, and
+    ``_parts`` the datasets of that file: with them the file is kept with the dataset (up to
+    ``LoadConfig.keep_file_max_mb``), so opening it from memory offers the other datasets.
 
     The result is kept in the library (``cached_datasets``), not in a Streamlit function
     cache, so the user can list it and forget it. A failed read is not kept: a ``ReadError``
@@ -87,7 +95,9 @@ def load_dataset(
         return entry.dataset, entry.schema
     with st.spinner("Reading the file…", show_time=True):
         dataset, schema = prepare_dataset(formats.load(_source, options))
-    library.put(LibraryEntry.create(dataset_id, dataset, schema, part, datetime.now()))
+    keep = _parts is not None and len(_source.data) <= _KEEP_FILE_BYTES
+    file = (_source, _parts) if keep else None
+    library.put(LibraryEntry.create(dataset_id, dataset, schema, part, datetime.now(), file))
     return dataset, schema
 
 

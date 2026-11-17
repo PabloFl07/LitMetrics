@@ -5,8 +5,9 @@ For now it holds the selector of the active dataset, which lists the datasets ke
 uploading the file again. Removing them is done in the Load page.
 
 When the active dataset is one of the datasets of a file with several (a table of a
-database), a second selector below lists the others. Picking one only records the choice:
-``reading.read_chosen_part``, run by app.py before the page, reads it.
+database), a second selector below lists the others. Opening such a dataset from memory opens
+its file again (``reading.open_kept``), so the selector comes back with it. Picking one only
+records the choice: ``reading.read_chosen_part``, run by app.py before the page, reads it.
 """
 
 import streamlit as st
@@ -57,7 +58,7 @@ def _on_switch() -> None:
     if entry is None:
         st.toast("That dataset is no longer in memory. Upload the file again.")
         return
-    state.switch_dataset(entry.dataset, entry.dataset_id, entry.schema)
+    reading.open_kept(entry)
 
 
 def _part_switcher() -> None:
