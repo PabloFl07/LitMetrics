@@ -8,6 +8,7 @@ plain ``pytest`` run: ``uv run pytest -m acceptance``.
 
 from pathlib import Path
 
+import pyarrow.parquet as pq
 from fixtures import samples
 from fixtures.browser import (
     RUN_TIMEOUT,
@@ -17,6 +18,7 @@ from fixtures.browser import (
     metric,
     open_tab,
     upload,
+    wait_idle,
 )
 from playwright.sync_api import Page, expect
 
@@ -175,3 +177,38 @@ def test_correlation_heatmap_is_drawn(app: Page, tmp_path):
     expect(heatmap).to_be_visible(timeout=RUN_TIMEOUT * 1000)
     box = heatmap.bounding_box()
     assert box is not None and box["height"] >= 300, box
+
+
+def test_analyst_exports_a_table_of_a_database_from_profile(app: Page, tmp_path):
+    """A table of a database is downloaded as Parquet from the sidebar, without leaving Profile.
+
+    Given a SQLite database with a 3-row ``cities`` table and a 60-row ``people`` table,
+    When the user picks ``people`` in the sidebar on Profile and exports it as Parquet,
+    Then the browser downloads ``town_people.parquet`` holding the 60 rows of ``people``.
+
+    Case: the file is written from the table read first instead of the active one, the
+    download gets the wrong name or extension, or the function given to the download button
+    fails when clicked (it runs in another thread, which AppTest never runs).
+    Affects: ui/sidebar.py (_export), core/io/export.py, ui/reading.py (active_part)
+    How: uploads ``TOWN_DB``, switches table on Profile, opens the Export popover, picks
+    Parquet, catches the download and reads the file with pyarrow.
+    """
+    page = app
+    go_to(page, "Load")
+    upload(page, _file(tmp_path, "town.db", samples.TOWN_DB))
+    go_to(page, "Profile")
+    choose_in_sidebar(page, "Table", "people")
+
+    sidebar = page.locator('[data-testid="stSidebar"]')
+    sidebar.get_by_role("button", name="Export").click()
+    page.get_by_role("radio", name="Parquet").click()
+    wait_idle(page)
+    with page.expect_download(timeout=RUN_TIMEOUT * 1000) as info:
+        page.get_by_role("button", name="Download").click()
+    download = info.value
+    expect_no_exception(page)
+
+    assert download.suggested_filename == "town_people.parquet"
+    table = pq.read_table(download.path())
+    assert table.num_rows == 60
+    assert table.column_names == ["id", "age", "city", "score"]

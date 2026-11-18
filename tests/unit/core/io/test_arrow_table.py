@@ -13,7 +13,8 @@ import pandas as pd
 import pyarrow as pa
 import pytest
 
-from litmetrics.core.io.arrow_table import to_frame
+from litmetrics.core.io.arrow_table import changes, to_frame
+from litmetrics.core.io.base import BINARY_AS_SIZE, TIME_AS_TEXT
 
 
 def test_plain_types_keep_their_dtype():
@@ -191,3 +192,30 @@ def test_number_column_names_become_strings():
     """
     df, _ = to_frame(pa.Table.from_pandas(pd.DataFrame({0: [1], 1: [2]})))
     assert list(df.columns) == ["0", "1"]
+
+
+def test_changes_lists_only_converted_columns():
+    """``changes`` names each column ``to_frame`` converts, with what happens to its values.
+
+    Case: a plain column is reported as changed (a false warning before every export), or a
+    converted one is missed, including one stored as dictionary (categories) of bytes.
+    Affects: core/io/arrow_table.py (changes, _conversion)
+    How: builds a schema with plain, time, binary, dictionary-of-binary and decimal columns and
+    compares the result.
+    """
+    schema = pa.schema(
+        [
+            ("id", pa.int64()),
+            ("city", pa.dictionary(pa.int32(), pa.string())),
+            ("start", pa.time64("us")),
+            ("img", pa.binary()),
+            ("blob", pa.dictionary(pa.int32(), pa.binary())),
+            ("price", pa.decimal128(10, 2)),
+        ]
+    )
+    assert changes(schema) == {
+        "start": TIME_AS_TEXT,
+        "img": BINARY_AS_SIZE,
+        "blob": BINARY_AS_SIZE,
+        "price": "exact decimals kept as floating-point numbers",
+    }

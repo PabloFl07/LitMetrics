@@ -15,8 +15,9 @@ import pytest
 from fixtures.samples import WORKBOOK
 from fixtures.xlsx_builder import xlsx
 
-from litmetrics.core.io.base import ReadError, Source
+from litmetrics.core.io.base import TIME_AS_TEXT, ReadError, Source
 from litmetrics.core.io.excel_loader import (
+    MIXED_AS_TEXT,
     ExcelLoader,
     ExcelOptions,
     describe_sheets,
@@ -128,12 +129,15 @@ def test_load_reads_the_chosen_sheet(sheet, column, values):
 def test_load_turns_mixed_columns_into_text():
     """A column mixing numbers and text becomes text, and the conversion is reported.
 
-    Case: pandas keeps an object column of floats and strings, which breaks numeric stats.
+    Case: pandas keeps an object column of floats and strings, which breaks numeric stats; or
+    the change is not recorded in ``changed``, so an export does not warn about it.
     Affects: core/io/excel_loader.py
-    How: loads a column with numbers, a word and an empty cell and checks values and details.
+    How: loads a column with numbers, a word and an empty cell and checks values, details and
+    ``changed``.
     """
     dataset = _load(xlsx({"S": [["price"], [1.5], ["unknown"], [None], [3]]}))
     assert dataset.details["mixed columns"] == "price (read as text)"
+    assert dataset.changed == {"price": MIXED_AS_TEXT}
     assert dataset.df["price"].iloc[1] == "unknown"
     assert pd.isna(dataset.df["price"].iloc[2])
 
@@ -141,12 +145,14 @@ def test_load_turns_mixed_columns_into_text():
 def test_load_turns_time_columns_into_text():
     """Times of day become ``HH:MM:SS`` text, and the conversion is reported.
 
-    Case: times become datetimes dated 1899-12-30 or today, inventing a date.
+    Case: times become datetimes dated 1899-12-30 or today, inventing a date; or the change is
+    not recorded in ``changed``, so an export does not warn about it.
     Affects: core/io/excel_loader.py
-    How: loads a column of times with an empty cell and checks values and details.
+    How: loads a column of times with an empty cell and checks values, details and ``changed``.
     """
     dataset = _load(xlsx({"S": [["start"], [time(9, 30)], [None], [time(17, 5, 10)]]}))
     assert dataset.details["time columns"] == "start (read as text)"
+    assert dataset.changed == {"start": TIME_AS_TEXT}
     assert dataset.df["start"].iloc[0] == "09:30:00"
     assert pd.isna(dataset.df["start"].iloc[1])
 

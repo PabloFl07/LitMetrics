@@ -10,7 +10,7 @@ import pytest
 from fixtures import files
 from fixtures.samples import PEOPLE_PARQUET
 
-from litmetrics.core.io.base import ReadError, Source
+from litmetrics.core.io.base import BINARY_AS_SIZE, ReadError, Source
 from litmetrics.core.io.parquet_loader import ParquetLoader, ParquetOptions
 
 
@@ -37,14 +37,18 @@ def test_reads_types():
 
 
 def test_details_list_converted_columns():
-    """Columns converted on the way (here a binary column) are listed in ``details``.
+    """Columns converted on the way (here a binary column) are listed in ``details`` and
+    ``changed``.
 
-    Case: the Parquet loader drops the details of ``to_frame``, so the user is not told.
+    Case: the Parquet loader drops the details of ``to_frame`` or the changes of
+    ``arrow_table.changes``, so the user is not told on Load or before an export.
     Affects: core/io/parquet_loader.py, core/io/arrow_table.py
-    How: reads a file with a binary column and compares the details.
+    How: reads a file with a binary column and compares the details and ``changed``.
     """
     data = files.parquet(pa.table({"x": [1], "raw": pa.array([b"abc"])}))
-    assert _load(data).details == {"binary columns": "raw (shown as their size)"}
+    dataset = _load(data)
+    assert dataset.details == {"binary columns": "raw (shown as their size)"}
+    assert dataset.changed == {"raw": BINARY_AS_SIZE}
 
 
 def test_reads_every_row_group():

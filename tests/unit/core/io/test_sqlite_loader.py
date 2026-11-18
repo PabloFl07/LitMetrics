@@ -9,7 +9,7 @@ import pytest
 from fixtures import files
 from fixtures.samples import SQLITE_AB, SQLITE_SHOWCASE
 
-from litmetrics.core.io.base import ReadError, Source
+from litmetrics.core.io.base import BINARY_AS_SIZE, ReadError, Source
 from litmetrics.core.io.sqlite_loader import (
     SqliteLoader,
     SqliteOptions,
@@ -142,6 +142,7 @@ def test_blobs_become_their_size():
     dataset = _load(data)
     assert list(dataset.df["image"].fillna("-")) == ["<3 bytes>", "-", "text"]
     assert dataset.details["binary columns"] == "image (shown as their size)"
+    assert dataset.changed == {"image": BINARY_AS_SIZE}
 
 
 # Errors
