@@ -9,6 +9,19 @@ change behavior).
 
 ### Added
 
+- **Export** in the sidebar: a popover on every page downloads the active dataset as CSV,
+  Parquet or Feather, named after the file and its table (`shop_orders.parquet`). The file is
+  only written when the user clicks Download, so reruns never convert the dataset. The
+  conversion lives in `core/io/export.py`, to be reused for cleaned datasets later.
+  Before the download, a warning lists what the file will not hold as in the original:
+  values that could not be read as numbers or dates (written empty), values the loader
+  changed (binary data written as its size, times and mixed columns as text, decimals as
+  floats, durations as seconds, nested values as JSON), a file name with characters some
+  systems refuse, and CSV exports from 1 M rows (slow). Loaders now record their changes in
+  `LoadedDataset.changed`.
+- **Home page**: the active dataset (rows, columns, format, datasets in memory) with links to
+  Profile and Load, or the formats that can be read when there is none, and a card per step
+  of the flow; steps that need a dataset are locked until one is loaded.
 - **Acceptance tests**: user journeys run in a real browser against the app started with
   `litmetrics` (Playwright), written as Given / When / Then: loading a Spanish export (cp1252,
   `;`, decimal commas) and seeing its quality issues, switching the tables of a database from
