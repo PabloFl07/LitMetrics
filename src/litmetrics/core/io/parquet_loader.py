@@ -49,6 +49,7 @@ class ParquetLoader:
             raise ReadError(f"'{name}' is not a Parquet file.")
         try:
             table = pq.read_table(pa.BufferReader(source.data))
+            changed = arrow_table.changes(table.schema)
             df, details = arrow_table.to_frame(table)
         # ArrowException: damaged pages or footer. OSError: pyarrow raises it for some
         # truncated files.
@@ -62,4 +63,4 @@ class ParquetLoader:
             raise ReadError(f"'{name}' has no columns.")
         if df.empty:
             raise ReadError(f"'{name}' has no data rows.")
-        return LoadedDataset(df, name, FORMAT_NAME, details)
+        return LoadedDataset(df, name, FORMAT_NAME, details, changed=changed)

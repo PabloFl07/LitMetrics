@@ -28,6 +28,8 @@ import pyarrow as pa
 import pyarrow.compute as pc
 import pyarrow.types as pat
 
+from litmetrics.core.io.base import BINARY_AS_SIZE, TIME_AS_TEXT
+
 # Nanoseconds in one unit of each Arrow duration unit.
 _DURATION_NS = {"s": 1_000_000_000, "ms": 1_000_000, "us": 1_000, "ns": 1}
 
@@ -70,6 +72,30 @@ _NOTES = {
     "binary columns": " (shown as their size)",
     "nested columns": " (shown as JSON text)",
 }
+
+
+# What each conversion does to the values, as ``LoadedDataset.changed`` notes.
+_CHANGES = {
+    "time columns": TIME_AS_TEXT,
+    "decimal columns": "exact decimals kept as floating-point numbers",
+    "duration columns": "durations kept as seconds",
+    "binary columns": BINARY_AS_SIZE,
+    "nested columns": "nested values kept as JSON text",
+}
+
+
+def changes(schema: pa.Schema) -> dict[str, str]:
+    """Columns of ``schema`` that ``to_frame`` converts, with what the conversion does to their
+    values (``LoadedDataset.changed``). Call it before ``to_frame``, which consumes the table.
+
+    Keys are the names in the file: a duplicated name, renamed by ``to_frame``, keeps only its
+    first occurrence.
+    """
+    found: dict[str, str] = {}
+    for arrow_field in schema:
+        if (conversion := _conversion(arrow_field.type)) is not None:
+            found.setdefault(str(arrow_field.name), _CHANGES[conversion[0]])
+    return found
 
 
 def _conversion(

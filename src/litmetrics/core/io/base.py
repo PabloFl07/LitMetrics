@@ -33,6 +33,11 @@ class Source:
     source_id: str
 
 
+# What a loader did to the values of a column (``LoadedDataset.changed``), shared by formats.
+BINARY_AS_SIZE = "binary values replaced by their size"
+TIME_AS_TEXT = "times of day kept as text"
+
+
 # eq=False: comparing two datasets would compare their DataFrames, which is ambiguous in pandas.
 # Two datasets are the same when their ``dataset_id`` is the same.
 @dataclass(frozen=True, eq=False)
@@ -49,6 +54,9 @@ class LoadedDataset:
         unparsed: For each date or numeric column stored as text in the file, how many of its
             values could not be read as dates or numbers (they became missing when the column
             was converted).
+        changed: Columns whose values the loader changed so the app can use them, with what
+            changed, as text for the user (``{"photo": BINARY_AS_SIZE}``). An export of the
+            dataset writes the changed values, not the original ones.
     """
 
     df: pd.DataFrame
@@ -56,6 +64,7 @@ class LoadedDataset:
     format: str
     details: Mapping[str, str] = field(default_factory=dict)
     unparsed: Mapping[str, int] = field(default_factory=dict)
+    changed: Mapping[str, str] = field(default_factory=dict)
 
     @property
     def n_rows(self) -> int:

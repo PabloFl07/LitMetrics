@@ -52,6 +52,7 @@ class FeatherLoader:
             raise ReadError(f"'{name}' is not a Feather (Arrow IPC) file.")
         try:
             table = feather.read_table(pa.BufferReader(source.data))
+            changed = arrow_table.changes(table.schema)
             df, details = arrow_table.to_frame(table)
         # ArrowException: damaged or truncated file. OSError: pyarrow raises it for some
         # truncated buffers.
@@ -65,4 +66,4 @@ class FeatherLoader:
             raise ReadError(f"'{name}' has no columns.")
         if df.empty:
             raise ReadError(f"'{name}' has no data rows.")
-        return LoadedDataset(df, name, FORMAT_NAME, details)
+        return LoadedDataset(df, name, FORMAT_NAME, details, changed=changed)

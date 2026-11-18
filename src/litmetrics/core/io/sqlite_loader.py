@@ -21,7 +21,7 @@ from dataclasses import dataclass, replace
 
 import pandas as pd
 
-from litmetrics.core.io.base import LoadedDataset, ReadError, Source
+from litmetrics.core.io.base import BINARY_AS_SIZE, LoadedDataset, ReadError, Source
 
 # Name of the format, shown to the user.
 FORMAT_NAME = "SQLite"
@@ -116,7 +116,8 @@ class SqliteLoader:
         details = {PART_LABEL.lower(): table}
         if binary:
             details["binary columns"] = ", ".join(binary) + " (shown as their size)"
-        return LoadedDataset(df, name, FORMAT_NAME, details)
+        changed = dict.fromkeys(binary, BINARY_AS_SIZE)
+        return LoadedDataset(df, name, FORMAT_NAME, details, changed=changed)
 
 
 @contextmanager

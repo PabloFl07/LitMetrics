@@ -25,13 +25,16 @@ from dataclasses import dataclass, replace
 import pandas as pd
 import python_calamine as calamine
 
-from litmetrics.core.io.base import LoadedDataset, ReadError, Source
+from litmetrics.core.io.base import TIME_AS_TEXT, LoadedDataset, ReadError, Source
 
 # Name of the format, shown to the user.
 FORMAT_NAME = "Excel"
 
 # What one of the datasets of a workbook is called, shown to the user.
 PART_LABEL = "Sheet"
+
+# ``LoadedDataset.changed`` note of a column whose cells had several types (numbers and text).
+MIXED_AS_TEXT = "values of several types kept as text"
 
 # Largest workbook (bytes) whose sheets are listed with their size. Finding the size of a sheet
 # parses it whole: about 0.7 s for 1.5 M cells, which fit in roughly 8 MB of .xlsx. Above this,
@@ -127,7 +130,8 @@ class ExcelLoader:
             details["time columns"] = ", ".join(times) + " (read as text)"
         if mixed:
             details["mixed columns"] = ", ".join(mixed) + " (read as text)"
-        return LoadedDataset(df, name, FORMAT_NAME, details)
+        changed = dict.fromkeys(times, TIME_AS_TEXT) | dict.fromkeys(mixed, MIXED_AS_TEXT)
+        return LoadedDataset(df, name, FORMAT_NAME, details, changed=changed)
 
 
 def _open(source: Source) -> pd.ExcelFile:
