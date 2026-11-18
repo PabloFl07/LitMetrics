@@ -2,7 +2,7 @@
 
 # LitMetrics
 
-**Explore a dataset in the browser: load a file, analyze its data, plot it and run statistics.**
+**Explore a dataset in the browser: load a file, analyze its data and plot it.**
 
 [![Python](https://img.shields.io/badge/python-3.14-3776AB?logo=python&logoColor=white)](https://www.python.org/)
 [![Streamlit](https://img.shields.io/badge/streamlit-1.66-FF4B4B?logo=streamlit&logoColor=white)](https://streamlit.io/)

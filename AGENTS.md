@@ -1,10 +1,10 @@
 # litmetrics
 
-Streamlit app to explore a dataset: load a CSV, check its quality, plot it with ECharts and run
-statistics. Flow of the user: Load → Profile → Visualization → Statistics.
+Streamlit app to explore a dataset: load a file, check its quality and plot it with ECharts.
+Flow of the user: Load → Profile → Visualization.
 
-Status: Load (CSV, SQLite, Excel, Parquet, Feather) and Profile work. Home and Visualization are
-stubs. Statistics has no page yet.
+Status: Home, Load (CSV, SQLite, Excel, Parquet, Feather) and Profile work. Visualization is a
+stub.
 
 ## Commands
 
