@@ -9,7 +9,9 @@ the loader guesses them again from the text (CSV).
 Before downloading, ``export_warnings`` tells the user what the file will not hold as in the
 original: values the app could not read, values changed by the loader (binary data replaced by
 its size...), a file name some systems refuse, and a slow conversion. Known limits of this
-release, to be fixed later; for now the user is warned.
+release, to be fixed later; for now the user is warned. For the values that will be empty,
+``unparsed_report`` lists each one with its row and its text in the original file, so the user
+can find and fix them there.
 
 The DataFrame is only read, never changed: it is the shared, cached dataset.
 """
@@ -126,6 +128,67 @@ def export_file_name(source_name: str, part: str | None, name: str) -> str:
     if part:
         stem = f"{stem}_{part}"
     return stem + export_format(name).extension
+
+
+# Columns of ``unparsed_report``, in order: row number (1 = first row of data, the header not
+# counted), column, value as written in the file, and what the column expected there.
+REPORT_COLUMNS = ("row", "column", "value", "expected")
+
+
+def unparsed_report(dataset: LoadedDataset) -> pd.DataFrame:
+    """Every value the app could not read, which an export writes empty, one per line.
+
+    Built from ``dataset.unparsed_values``: only the lost values are read, not the rows.
+
+    Returns:
+        A DataFrame with ``REPORT_COLUMNS``, sorted by row and then by the order of the
+        columns in the dataset. ``row`` starts at 1 with the first row of data. Without
+        lines when every value was read.
+    """
+    order = {name: i for i, name in enumerate(dataset.df.columns)}
+    parts = [
+        pd.DataFrame(
+            {
+                "row": values.index.to_numpy(dtype="int64") + 1,
+                "column": name,
+                "value": values.astype("str").to_numpy(),
+                "expected": _expected(dataset.df[name]),
+                "_order": order[name],
+            }
+        )
+        for name, values in dataset.unparsed_values.items()
+        if len(values) and name in order
+    ]
+    if not parts:
+        return pd.DataFrame(
+            {
+                "row": pd.Series(dtype="int64"),
+                **{c: pd.Series(dtype="str") for c in REPORT_COLUMNS[1:]},
+            }
+        )
+    report = pd.concat(parts, ignore_index=True).sort_values(["row", "_order"], kind="stable")
+    return report.drop(columns="_order").reset_index(drop=True)
+
+
+def affected_rows(report: pd.DataFrame) -> int:
+    """Rows with at least one value of ``report`` (``unparsed_report``) written empty."""
+    return int(report["row"].nunique())
+
+
+def report_file_name(file_name: str) -> str:
+    """Name of the report of the export ``file_name``: ``shop_orders.csv`` gives
+    ``shop_orders_problems.csv``. Always CSV, to open it in any spreadsheet."""
+    return f"{PurePath(file_name).stem}_problems.csv"
+
+
+def write_report(report: pd.DataFrame) -> bytes:
+    """Bytes of ``report`` (``unparsed_report``) as a CSV file in UTF-8."""
+    return _write_csv(report)
+
+
+def _expected(column: pd.Series) -> str:
+    """What a typed column holds, as the report says it: "date" or "number"."""
+    return "date" if ptypes.is_datetime64_any_dtype(column) else "number"
 
 
 def export_warnings(

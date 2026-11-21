@@ -54,6 +54,9 @@ class LoadedDataset:
         unparsed: For each date or numeric column stored as text in the file, how many of its
             values could not be read as dates or numbers (they became missing when the column
             was converted).
+        unparsed_values: Those values as they were in the file, per column, indexed by their
+            row position (0 = first row of data): what the export report lists
+            (``export.unparsed_report``). Set with ``unparsed`` by ``schema.prepare_dataset``.
         changed: Columns whose values the loader changed so the app can use them, with what
             changed, as text for the user (``{"photo": BINARY_AS_SIZE}``). An export of the
             dataset writes the changed values, not the original ones.
@@ -64,6 +67,7 @@ class LoadedDataset:
     format: str
     details: Mapping[str, str] = field(default_factory=dict)
     unparsed: Mapping[str, int] = field(default_factory=dict)
+    unparsed_values: Mapping[str, pd.Series] = field(default_factory=dict)
     changed: Mapping[str, str] = field(default_factory=dict)
 
     @property

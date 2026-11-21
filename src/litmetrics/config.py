@@ -57,11 +57,13 @@ class LoadConfig:
 
 @dataclass(frozen=True)
 class ExportConfig:
-    """Settings of the Export popover of the sidebar."""
+    """Settings of the Export dialog of the sidebar."""
 
     # From this many rows, exporting to a slow format (CSV) shows a warning before the
     # download. CSV took 19.8 s for 3.1 M rows, against 0.6 s for Parquet (housing x 150).
     slow_rows: int = 1_000_000
+    # Lines of the problem report shown in the dialog; the downloaded report has them all.
+    report_preview_rows: int = 200
 
 
 @dataclass(frozen=True)

@@ -9,17 +9,19 @@ database), a second selector below lists the others. Opening such a dataset from
 its file again (``reading.open_kept``), so the selector comes back with it. Picking one only
 records the choice: ``reading.read_chosen_part``, run by app.py before the page, reads it.
 
-Below them, an Export popover downloads the active dataset in another format
-(``core/io/export.py``). The file is only written when the user clicks the download button:
-``st.download_button`` gets a function, not the bytes, so no rerun converts the dataset. Above
-the button, a warning lists what the file will not hold as in the original
-(``export.export_warnings``).
+Below them, an Export button opens a dialog that downloads the active dataset in another
+format (``core/io/export.py``). The file is only written when the user clicks the download
+button: ``st.download_button`` gets a function, not the bytes, so no rerun converts the
+dataset. Above the button, a warning lists what the file will not hold as in the original
+(``export.export_warnings``) and, when values will be written empty, a report lists each one
+with its row (``export.unparsed_report``), to preview and download.
 """
 
 import streamlit as st
 
 from litmetrics.config import ExportConfig
 from litmetrics.core.io import export
+from litmetrics.core.io.base import LoadedDataset
 from litmetrics.core.io.library import LibraryEntry
 from litmetrics.ui import cache, reading, state, text
 
@@ -104,33 +106,81 @@ def _on_part_switch() -> None:
 
 
 def _export() -> None:
-    """Popover to download the active dataset as a file of another format."""
+    """Button that opens the Export dialog, when a dataset is active."""
+    if state.get_dataset() is None:
+        return
+    if st.button("Export", icon=":material/download:", width="stretch"):
+        _export_dialog()
+
+
+# A dialog is a fragment: changing the format reruns only the dialog, not the page behind it.
+@st.dialog("Export dataset", width="medium", icon=":material/download:")
+def _export_dialog() -> None:
+    """Download the active dataset as a file of another format, warned of what it loses."""
     if (dataset := state.get_dataset()) is None:
+        st.info("Load a file in the Load page to export it.")
         return
     names = [fmt.name for fmt in export.EXPORT_FORMATS]
-    with st.popover("Export", icon=":material/download:", width="stretch"):
-        # Offer another format than the one read first: same format is rarely what is wanted.
-        name = st.segmented_control(
-            "Format",
-            names,
-            default=next((n for n in names if n != dataset.format), names[0]),
-            required=True,
+    # Offer another format than the one read first: same format is rarely what is wanted.
+    name = st.segmented_control(
+        "Format",
+        names,
+        default=next((n for n in names if n != dataset.format), names[0]),
+        required=True,
+    )
+    file_name = export.export_file_name(dataset.name, reading.active_part(), name)
+    warnings = export.export_warnings(dataset, file_name, name, ExportConfig.slow_rows)
+    if warnings:
+        # Messages quote column and file names: escaped, so they show as written.
+        st.warning("\n".join(f"- {text.md(message)}" for message in warnings))
+    _problem_report(dataset, file_name)
+    df = dataset.df
+    st.download_button(
+        "Download",
+        # Called only on click, in another thread: no rerun converts the dataset.
+        data=lambda: export.export(df, name),
+        file_name=file_name,
+        mime=export.export_format(name).mime,
+        # Downloading changes nothing in the app: no rerun.
+        on_click="ignore",
+        icon=":material/download:",
+        type="primary",
+        width="stretch",
+    )
+
+
+def _problem_report(dataset: LoadedDataset, file_name: str) -> None:
+    """Values the export writes empty, with their row: a preview and a CSV to download."""
+    report = export.unparsed_report(dataset)
+    if report.empty:
+        return
+    rows = export.affected_rows(report)
+    label = f"Problem report: {rows:,} {'row' if rows == 1 else 'rows'} affected"
+    with st.expander(label, icon=":material/report:"):
+        preview = ExportConfig.report_preview_rows
+        shown = "" if len(report) <= preview else f" The first {preview:,} are shown."
+        st.caption(
+            f"{len(report):,} values could not be read and will be empty in the file."
+            f" Row 1 is the first row of data, below the header.{shown}"
         )
-        file_name = export.export_file_name(dataset.name, reading.active_part(), name)
-        warnings = export.export_warnings(dataset, file_name, name, ExportConfig.slow_rows)
-        if warnings:
-            # Messages quote column and file names: escaped, so they show as written.
-            st.warning("\n".join(f"- {text.md(message)}" for message in warnings))
-        df = dataset.df
+        # Capped: the report can have as many lines as bad values (R-E3).
+        st.dataframe(
+            report.head(preview),
+            hide_index=True,
+            width="stretch",
+            column_config={
+                "row": st.column_config.NumberColumn("Row", format="%d"),
+                "column": "Column",
+                "value": st.column_config.TextColumn("Value in the file"),
+                "expected": "Expected",
+            },
+        )
         st.download_button(
-            "Download",
-            # Called only on click, in another thread: no rerun converts the dataset.
-            data=lambda: export.export(df, name),
-            file_name=file_name,
-            mime=export.export_format(name).mime,
-            # Downloading changes nothing in the app: no rerun.
+            "Download report",
+            data=lambda: export.write_report(report),
+            file_name=export.report_file_name(file_name),
+            mime="text/csv",
             on_click="ignore",
-            icon=":material/download:",
-            type="primary",
+            icon=":material/table_view:",
             width="stretch",
         )

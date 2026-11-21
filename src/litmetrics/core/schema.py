@@ -230,11 +230,14 @@ class TypedFrame:
         schema: The schema, with ``pandas_dtype`` updated to the new dtypes.
         unparsed: For each date or numeric column that was text, values that were not dates
             or numbers and became missing.
+        unparsed_values: For the same columns, those values as they were in the file, indexed
+            by their row position (0 = first row of data). Empty Series when all were read.
     """
 
     df: pd.DataFrame
     schema: Schema
     unparsed: Mapping[str, int]
+    unparsed_values: Mapping[str, pd.Series]
 
 
 def apply_schema(df: pd.DataFrame, schema: Schema) -> TypedFrame:
@@ -252,25 +255,37 @@ def apply_schema(df: pd.DataFrame, schema: Schema) -> TypedFrame:
     """
     # Shallow copy: with copy-on-write, assigning a column here never changes ``df``.
     typed = df.copy(deep=False)
-    unparsed: dict[str, int] = {}
+    lost: dict[str, pd.Series] = {}
     for column in schema.columns:
         name, kind = column.name, column.semantic_type
         series = df[name]
         if kind is SemanticType.DATETIME:
             dates = _to_dates(series)
             if not ptypes.is_datetime64_any_dtype(series):
-                unparsed[name] = int(series.notna().sum() - dates.notna().sum())
+                lost[name] = _lost_values(series, dates)
             typed[name] = dates
         elif kind is SemanticType.NUMERIC and not ptypes.is_numeric_dtype(series):
             numbers = _by_unique(series, lambda u: pd.to_numeric(u, errors="coerce"))
-            unparsed[name] = int(series.notna().sum() - numbers.notna().sum())
+            lost[name] = _lost_values(series, numbers)
             typed[name] = numbers
         elif _is_text_category(series, kind):
             typed[name] = series.astype("category")
     columns = tuple(
         dataclasses.replace(c, pandas_dtype=str(typed[c.name].dtype)) for c in schema.columns
     )
-    return TypedFrame(typed, Schema(columns), unparsed)
+    unparsed = {name: len(values) for name, values in lost.items()}
+    return TypedFrame(typed, Schema(columns), unparsed, lost)
+
+
+def _lost_values(original: pd.Series, converted: pd.Series) -> pd.Series:
+    """Values of ``original`` that ``converted`` turned missing, indexed by row position.
+
+    Positions, not the labels of the index: they are what the user can find in the file. One
+    vectorized mask (R-P5); only the lost values are kept, a few by the inference thresholds.
+    """
+    lost = original.notna().to_numpy() & converted.isna().to_numpy()
+    positions = np.flatnonzero(lost)
+    return original.iloc[positions].set_axis(positions)
 
 
 def _is_text_category(series: pd.Series, kind: SemanticType) -> bool:
@@ -363,8 +378,11 @@ def prepare_dataset(dataset: LoadedDataset) -> tuple[LoadedDataset, Schema]:
     """Infer the schema of a freshly read dataset and convert its columns to match it.
 
     Returns:
-        The dataset with converted columns (and its ``unparsed``), and its schema.
+        The dataset with converted columns (and its ``unparsed`` / ``unparsed_values``), and
+        its schema.
     """
     result = apply_schema(dataset.df, infer_schema(dataset.df))
-    typed = dataclasses.replace(dataset, df=result.df, unparsed=result.unparsed)
+    typed = dataclasses.replace(
+        dataset, df=result.df, unparsed=result.unparsed, unparsed_values=result.unparsed_values
+    )
     return typed, result.schema
