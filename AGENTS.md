@@ -42,8 +42,8 @@ src/litmetrics/
     io/library.py   DatasetLibrary: datasets kept in memory (LRU), listable and removable
     io/parquet_loader.py, io/feather_loader.py  Parquet / Feather (Arrow IPC) files, no options
     io/arrow_table.py    Arrow table -> DataFrame, shared by Parquet and Feather
-    io/export.py    Writes a DataFrame as CSV / Parquet / Feather bytes, and the warnings shown
-                    before the download (sidebar Export)
+    io/export.py    Writes a DataFrame as CSV / Parquet / Feather bytes, the warnings shown
+                    before the download and the report of values written empty (sidebar Export)
     schema.py       Semantic type of each column, and conversion to its dtype at load time
     profile.py      Base pass (missing, distinct, duplicates), correlation, issues
     columns.py      Column table of Profile: overview, per-type tables, one column (inspector)
@@ -54,7 +54,7 @@ src/litmetrics/
     cache.py        Cache wrappers around core functions (load_dataset, Profile sections) and
                     the dataset library (cached_datasets, forget_dataset, clear_all)
     sidebar.py      Sidebar of every page (drawn by app.py after the page): dataset switcher and,
-                    for a table of a database, table switcher, and the Export popover
+                    for a table of a database, table switcher, and the Export dialog
     text.py         Text for the user: ``md`` escapes names drawn as Markdown, ``format_bytes``
     reading.py      Reads a dataset into the session (Load page, and the table picked anywhere)
     charts.py       ECharts option builders: plain dicts, no streamlit, no streamlit_echarts

@@ -205,6 +205,22 @@ def test_prepare_dataset():
     assert pd.api.types.is_datetime64_any_dtype(dataset.df["when"])
 
 
+def test_unparsed_values_keep_their_text_and_row_position():
+    """The values that became missing are kept as written, at their position in the file.
+
+    Case: the report of an export points at the wrong row because it uses the labels of the
+    index (left over from a filter) instead of positions, or lists missing values as unread.
+    Affects: core/schema.py (apply_schema, _lost_values)
+    How: types a text column indexed 10, 20, 30, 40 with "12 kg" second and a missing value,
+    and checks the values kept, their positions and the count.
+    """
+    df = pd.DataFrame({"n": ["1", "12 kg", None, "4"]}, index=[10, 20, 30, 40])
+    typed = sch.apply_schema(df, _schema(n=("str", T.NUMERIC)))
+    lost = typed.unparsed_values["n"]
+    assert lost.to_dict() == {1: "12 kg"}
+    assert typed.unparsed == {"n": 1}
+
+
 # Schema object
 
 

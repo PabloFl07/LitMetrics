@@ -104,3 +104,26 @@ def test_export_warns_about_what_the_loader_changed(name, data, part, column):
     dataset, _ = _read(name, data, part)
     messages = export.export_warnings(dataset, "out.parquet", "Parquet", slow_rows=10**9)
     assert any(f"'{column}'" in message for message in messages), messages
+
+
+def test_report_points_at_the_rows_of_the_file_that_will_be_empty():
+    """Values the app cannot read are reported with the row and the text the file has.
+
+    Case: ``prepare_dataset`` keeps the counts but drops the values on the way, or the rows
+    are off by one against the file the user opens to fix them.
+    Affects: core/io/csv_loader.py, core/schema.py (prepare_dataset, apply_schema),
+    core/io/export.py (unparsed_report)
+    How: reads ``ORDERS_WITH_TYPOS_CSV`` as the Load page does and checks each line of the
+    report against the rows of the file.
+    """
+    dataset, _ = _read("orders.csv", samples.ORDERS_WITH_TYPOS_CSV)
+    report = export.unparsed_report(dataset)
+    lines = samples.ORDERS_WITH_TYPOS_CSV.decode().splitlines()
+    assert report[["row", "column", "value"]].to_dict("records") == [
+        {"row": 5, "column": "price", "value": "12 kg"},
+        {"row": 30, "column": "date", "value": "someday"},
+        {"row": 30, "column": "price", "value": "abc"},
+    ]
+    # Row n of data is line n + 1 of the file (the header is line 1).
+    for row, value in zip(report["row"], report["value"], strict=True):
+        assert value in lines[row]

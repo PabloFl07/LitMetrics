@@ -43,6 +43,19 @@ QUALITY_CSV = (
 # Read with the default options, ``precio`` would be text and look like an identifier.
 EUROPEAN_CSV = b"precio;ciudad\n" + b"".join(b"%d,5;Lugo\n" % i for i in range(30))
 
+
+def _orders_rows() -> list[bytes]:
+    rows = [b"%d,2024-03-%02d,%d.5" % (i, i % 28 + 1, 10 + i) for i in range(60)]
+    rows[4] = b"4,2024-03-05,12 kg"
+    rows[29] = b"29,someday,abc"
+    return rows
+
+
+# 60 orders with values the app cannot read, as typed by hand: ``price`` has "12 kg" (row 5)
+# and "abc" (row 30), ``date`` has "someday" (row 30). Both columns still pass the inference
+# thresholds (95%), so they are typed and those 3 values become empty: 2 rows affected.
+ORDERS_WITH_TYPOS_CSV = b"id,date,price\n" + b"\n".join(_orders_rows()) + b"\n"
+
 # A file with only blanks: the smallest file that cannot be read.
 EMPTY_CSV = b"   \n"
 

@@ -9,7 +9,7 @@ change behavior).
 
 ### Added
 
-- **Export** in the sidebar: a popover on every page downloads the active dataset as CSV,
+- **Export** in the sidebar: a button on every page opens a dialog that downloads the active dataset as CSV,
   Parquet or Feather, named after the file and its table (`shop_orders.parquet`). The file is
   only written when the user clicks Download, so reruns never convert the dataset. The
   conversion lives in `core/io/export.py`, to be reused for cleaned datasets later.
@@ -19,6 +19,9 @@ change behavior).
   floats, durations as seconds, nested values as JSON), a file name with characters some
   systems refuse, and CSV exports from 1 M rows (slow). Loaders now record their changes in
   `LoadedDataset.changed`.
+  When values will be written empty, a **problem report** in the dialog lists each one with
+  its row, column, text in the file and expected type, and downloads as
+  `<file>_problems.csv`. The values are kept at load time in `LoadedDataset.unparsed_values`.
 - **Home page**: the active dataset (rows, columns, format, datasets in memory) with links to
   Profile and Load, or the formats that can be read when there is none, and a card per step
   of the flow; steps that need a dataset are locked until one is loaded.

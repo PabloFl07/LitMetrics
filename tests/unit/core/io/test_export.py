@@ -252,3 +252,59 @@ def test_slow_format_is_warned_from_the_limit(name, rows, warned):
     messages = export.export_warnings(dataset, "data.csv", name, slow_rows=10)
     expected = (f"Writing {rows:,} rows as CSV takes a while: Parquet or Feather are much faster.",)
     assert messages == (expected if warned else ())
+
+
+def test_report_lists_each_lost_value_by_row_then_column():
+    """The problem report has one line per lost value, ordered as the user reads the file.
+
+    Case: rows are numbered from 0 (the user looks one row too high), or lines of one row
+    are scattered by column, or a date column is reported as expecting a number.
+    Affects: core/io/export.py (unparsed_report, affected_rows)
+    How: gives lost values at positions 4 and 0 of ``price`` and 4 of ``date`` (declared after
+    ``price`` in the frame) and reads the whole report.
+    """
+    df = pd.DataFrame({"date": pd.to_datetime(["2024-01-01"] * 5), "price": [1.0] * 5})
+    dataset = _dataset(
+        df,
+        unparsed_values={
+            "price": pd.Series(["abc", "12 kg"], index=[4, 0]),
+            "date": pd.Series(["someday"], index=[4]),
+        },
+    )
+    report = export.unparsed_report(dataset)
+    assert list(report.columns) == list(export.REPORT_COLUMNS)
+    assert report.to_dict("records") == [
+        {"row": 1, "column": "price", "value": "12 kg", "expected": "number"},
+        {"row": 5, "column": "date", "value": "someday", "expected": "date"},
+        {"row": 5, "column": "price", "value": "abc", "expected": "number"},
+    ]
+    assert export.affected_rows(report) == 2
+
+
+def test_report_of_a_clean_dataset_is_empty_with_its_columns():
+    """A dataset read without losses has an empty report that can still be written.
+
+    Case: ``pd.concat`` of no parts raises, or a column read without losses (an empty Series)
+    adds lines, so the dialog shows a report with nothing in it.
+    Affects: core/io/export.py (unparsed_report, write_report)
+    How: gives a frame with one column whose lost values are empty and reads the report and
+    its CSV.
+    """
+    dataset = _dataset(
+        pd.DataFrame({"a": [1.0]}), unparsed_values={"a": pd.Series([], dtype="str")}
+    )
+    report = export.unparsed_report(dataset)
+    assert report.empty
+    assert export.write_report(report) == b"row,column,value,expected\n"
+
+
+def test_report_file_name_follows_the_export():
+    """The report is named after the exported file, always as CSV.
+
+    Case: the report of ``shop_orders.parquet`` downloads as ``shop_orders.parquet`` and
+    replaces the export, or gets a name that does not say which export it belongs to.
+    Affects: core/io/export.py (report_file_name)
+    How: names the reports of a Parquet and a CSV export.
+    """
+    assert export.report_file_name("shop_orders.parquet") == "shop_orders_problems.csv"
+    assert export.report_file_name("data.csv") == "data_problems.csv"

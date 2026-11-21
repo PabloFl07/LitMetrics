@@ -190,7 +190,7 @@ def test_analyst_exports_a_table_of_a_database_from_profile(app: Page, tmp_path)
     download gets the wrong name or extension, or the function given to the download button
     fails when clicked (it runs in another thread, which AppTest never runs).
     Affects: ui/sidebar.py (_export), core/io/export.py, ui/reading.py (active_part)
-    How: uploads ``TOWN_DB``, switches table on Profile, opens the Export popover, picks
+    How: uploads ``TOWN_DB``, switches table on Profile, opens the Export dialog, picks
     Parquet, catches the download and reads the file with pyarrow.
     """
     page = app
@@ -204,7 +204,7 @@ def test_analyst_exports_a_table_of_a_database_from_profile(app: Page, tmp_path)
     page.get_by_role("radio", name="Parquet").click()
     wait_idle(page)
     with page.expect_download(timeout=RUN_TIMEOUT * 1000) as info:
-        page.get_by_role("button", name="Download").click()
+        page.get_by_role("dialog").get_by_role("button", name="Download", exact=True).click()
     download = info.value
     expect_no_exception(page)
 
@@ -212,3 +212,42 @@ def test_analyst_exports_a_table_of_a_database_from_profile(app: Page, tmp_path)
     table = pq.read_table(download.path())
     assert table.num_rows == 60
     assert table.column_names == ["id", "age", "city", "score"]
+
+
+def test_analyst_downloads_the_report_of_values_lost_in_an_export(app: Page, tmp_path):
+    """Before exporting, the user gets the list of values that will be empty, by row.
+
+    Given a CSV of 60 orders with "12 kg" and "abc" in ``price`` and "someday" in ``date``,
+    When the user opens Export, unfolds the problem report and downloads it,
+    Then the dialog says 2 rows are affected and the browser downloads
+    ``orders_problems.csv`` with the 3 values, their rows and columns.
+
+    Case: the dialog does not open from the sidebar, the report is not offered, or the
+    function given to its download button fails when clicked (it runs in another thread,
+    which AppTest never runs).
+    Affects: ui/sidebar.py (_export_dialog, _problem_report), core/io/export.py
+    (unparsed_report, write_report), core/schema.py (apply_schema)
+    How: uploads ``ORDERS_WITH_TYPOS_CSV``, opens the dialog, catches the report's download
+    and reads its lines.
+    """
+    page = app
+    go_to(page, "Load")
+    upload(page, _file(tmp_path, "orders.csv", samples.ORDERS_WITH_TYPOS_CSV))
+
+    page.locator('[data-testid="stSidebar"]').get_by_role("button", name="Export").click()
+    dialog = page.get_by_role("dialog")
+    report = dialog.get_by_text("Problem report: 2 rows affected")
+    expect(report).to_be_visible(timeout=RUN_TIMEOUT * 1000)
+    report.click()
+    with page.expect_download(timeout=RUN_TIMEOUT * 1000) as info:
+        dialog.get_by_role("button", name="Download report").click()
+    download = info.value
+    expect_no_exception(page)
+
+    assert download.suggested_filename == "orders_problems.csv"
+    assert Path(download.path()).read_text("utf-8").splitlines() == [
+        "row,column,value,expected",
+        "5,price,12 kg,number",
+        "30,date,someday,date",
+        "30,price,abc,number",
+    ]
