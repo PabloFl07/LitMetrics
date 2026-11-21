@@ -7,7 +7,7 @@
 [![Python](https://img.shields.io/badge/python-3.14-3776AB?logo=python&logoColor=white)](https://www.python.org/)
 [![Streamlit](https://img.shields.io/badge/streamlit-1.66-FF4B4B?logo=streamlit&logoColor=white)](https://streamlit.io/)
 [![uv](https://img.shields.io/endpoint?url=https://raw.githubusercontent.com/astral-sh/uv/main/assets/badge/v0.json)](https://github.com/astral-sh/uv)
-[![Version](https://img.shields.io/badge/version-0.4.0-blue)](pyproject.toml)
+[![Version](https://img.shields.io/badge/version-0.5.0-blue)](pyproject.toml)
 
 </div>
 
@@ -30,6 +30,12 @@ header, dates and numbers stored as text, and datasets with millions of rows.
 - [Documentation](#documentation)
 
 ## Features
+
+### Home
+
+- **Where you are**: the active dataset (rows, columns, format, datasets in memory) with links
+  to Profile and Load, or the formats that can be read when nothing is loaded yet.
+- **One card per step** of the flow; steps that need a dataset stay locked until one is loaded.
 
 ### Load
 
@@ -62,6 +68,17 @@ header, dates and numbers stored as text, and datasets with millions of rows.
 - **Correlation**: Pearson or Spearman heatmap of the numeric columns and the strongest pairs.
 - **Skip columns**: leave out data that is hard to deal with, such as codes stored as numbers
   (phone numbers, postal codes), so it does not distort the statistics.
+
+### Export
+
+- **Download the active dataset** as CSV, Parquet or Feather from the sidebar of any page,
+  named after the file and its table (`shop_orders.parquet`). The file is only written when
+  you click Download.
+- **No silent losses**: before the download, a warning lists what the file will not hold as
+  in the original (values that could not be read, written empty; values the loader changed,
+  such as binary data or nested values; risky file names; slow CSV exports of large datasets).
+- **Problem report**: every value written empty, with its row, column, text in the file and
+  expected type, downloadable as `<file>_problems.csv`.
 
 ### Look
 
@@ -108,7 +125,7 @@ src/litmetrics/
 ├── app.py              Page setup and top navigation
 ├── config.py           Thresholds and limits (frozen dataclasses)
 ├── core/               Pure logic, no Streamlit
-│   ├── io/             Loaders, format registry, CSV detection, datasets in memory
+│   ├── io/             Loaders, format registry, CSV detection, datasets in memory, export
 │   ├── schema.py       Semantic types and column conversion
 │   ├── profile.py      Missing values, duplicates, correlation, issues
 │   ├── columns.py      Per-column tables and detail
@@ -123,11 +140,16 @@ src/litmetrics/
     ├── style.py        Stylesheets, page header and cards
     ├── tables.py       Rows prepared for st.dataframe
     ├── reading.py      Reads a dataset into the session
-    ├── sidebar.py      Dataset and table switcher shown on every page
+    ├── text.py         Text for the user: escaped names, byte sizes
+    ├── sidebar.py      Dataset and table switcher and Export, shown on every page
     ├── themes/         Streamlit theme of each style variant
     ├── styles/         Stylesheet of each style variant
     └── pages/          One module per page
-tests/                  pytest and AppTest smoke tests
+tests/
+├── fixtures/           Test subjects: sample data, file builders, AppTest scripts
+├── unit/               One module at a time
+├── integration/        Modules together, pages through AppTest
+└── acceptance/         User journeys in a real browser (Playwright)
 scripts/                bench_profile.py: benchmark of Load and Profile
 docs/                   Reference documentation
 ```
@@ -136,11 +158,16 @@ docs/                   Reference documentation
 
 ```bash
 uv sync                          # install, including dev tools
-uv run pytest -q                 # tests (about 5 s)
+uv run pytest -q                 # unit + integration tests (about 15 s)
+uv run playwright install chromium   # once, for the acceptance tests
+uv run pytest -m acceptance -q   # user journeys in a headless browser (about 30 s)
 uv run ruff format src tests     # format
 uv run ruff check src tests      # lint
 uv run python scripts/bench_profile.py   # time Load + Profile on 3 M rows
 ```
+
+- Continuous integration (GitHub Actions, `.github/workflows/ci.yaml`) runs lint, unit and
+  integration tests, then the acceptance tests, on every push to `main` and `dev`.
 
 - Dependencies are pinned in `uv.lock`. Add them with `uv add <package>`
   (`uv add --dev <package>` for tools); never edit the lock file by hand.

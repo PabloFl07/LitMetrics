@@ -7,6 +7,8 @@ change behavior).
 
 ## [Unreleased]
 
+## [0.5.0] - 2026-11-21
+
 ### Added
 
 - **Export** in the sidebar: a button on every page opens a dialog that downloads the active dataset as CSV,
@@ -200,7 +202,8 @@ change behavior).
 
 - Project structure: Streamlit app with top navigation, uv, ruff, pre-commit and pytest.
 
-[Unreleased]: https://github.com/PabloFl07/LitMetrics/compare/v0.4.0...HEAD
+[Unreleased]: https://github.com/PabloFl07/LitMetrics/compare/v0.5.0...HEAD
+[0.5.0]: https://github.com/PabloFl07/LitMetrics/compare/v0.4.0...v0.5.0
 [0.4.0]: https://github.com/PabloFl07/LitMetrics/compare/v0.3.0...v0.4.0
 [0.3.0]: https://github.com/PabloFl07/LitMetrics/compare/v0.2.0...v0.3.0
 [0.2.0]: https://github.com/PabloFl07/LitMetrics/releases/tag/v0.2.0

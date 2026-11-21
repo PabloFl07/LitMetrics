@@ -3,8 +3,8 @@
 Streamlit app to explore a dataset: load a file, check its quality and plot it with ECharts.
 Flow of the user: Load → Profile → Visualization.
 
-Status: Home, Load (CSV, SQLite, Excel, Parquet, Feather) and Profile work. Visualization is a
-stub.
+Status: Home, Load (CSV, SQLite, Excel, Parquet, Feather), Profile and Export (CSV, Parquet,
+Feather, from the sidebar) work. Visualization is a stub.
 
 ## Commands
 
