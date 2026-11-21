@@ -146,6 +146,13 @@ SQLITE_AB = files.sqlite(
     "INSERT INTO a VALUES (1)",
 )
 
+# A table whose untyped column ``code`` holds integers, text and NULL: SQLite allows it, and a
+# typed format (Parquet, Feather) cannot write it as it comes from pandas (``object``).
+SQLITE_MIXED = files.sqlite(
+    "CREATE TABLE t (id INTEGER, code)",
+    "INSERT INTO t VALUES (1, 10), (2, 'A-7'), (3, NULL), (4, 2.5)",
+)
+
 # A database with two tables of different sizes, to see which one is open:
 # ``cities`` (3 rows, 1 column) and ``people`` (60 rows, 4 columns).
 TOWN_DB = files.sqlite_tables(

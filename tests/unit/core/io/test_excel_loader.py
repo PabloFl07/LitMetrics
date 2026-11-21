@@ -15,9 +15,8 @@ import pytest
 from fixtures.samples import WORKBOOK
 from fixtures.xlsx_builder import xlsx
 
-from litmetrics.core.io.base import TIME_AS_TEXT, ReadError, Source
+from litmetrics.core.io.base import MIXED_AS_TEXT, TIME_AS_TEXT, ReadError, Source
 from litmetrics.core.io.excel_loader import (
-    MIXED_AS_TEXT,
     ExcelLoader,
     ExcelOptions,
     describe_sheets,

@@ -14,7 +14,9 @@ format (``core/io/export.py``). The file is only written when the user clicks th
 button: ``st.download_button`` gets a function, not the bytes, so no rerun converts the
 dataset. Above the button, a warning lists what the file will not hold as in the original
 (``export.export_warnings``) and, when values will be written empty, a report lists each one
-with its row (``export.unparsed_report``), to preview and download.
+with its row (``export.unparsed_report``), to preview and download. Right above the button,
+for a slow format and a large dataset, how long the file takes to write
+(``export.slow_export``): a warning, or an error when the browser may give up waiting.
 """
 
 import streamlit as st
@@ -129,11 +131,12 @@ def _export_dialog() -> None:
         required=True,
     )
     file_name = export.export_file_name(dataset.name, reading.active_part(), name)
-    warnings = export.export_warnings(dataset, file_name, name, ExportConfig.slow_rows)
+    warnings = export.export_warnings(dataset, file_name)
     if warnings:
         # Messages quote column and file names: escaped, so they show as written.
         st.warning("\n".join(f"- {text.md(message)}" for message in warnings))
     _problem_report(dataset, file_name)
+    _slow_export(dataset, name)
     df = dataset.df
     st.download_button(
         "Download",
@@ -147,6 +150,17 @@ def _export_dialog() -> None:
         type="primary",
         width="stretch",
     )
+
+
+def _slow_export(dataset: LoadedDataset, name: str) -> None:
+    """How long the file takes to write, when it is long; an error when it may not finish."""
+    slow = export.slow_export(
+        dataset, name, ExportConfig.slow_seconds, ExportConfig.download_timeout_seconds
+    )
+    if slow is None:
+        return
+    show = st.error if slow.may_fail else st.warning
+    show(text.md(slow.message), icon=":material/schedule:")
 
 
 def _problem_report(dataset: LoadedDataset, file_name: str) -> None:

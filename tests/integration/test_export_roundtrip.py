@@ -39,6 +39,7 @@ _SOURCES = [
     pytest.param("people.feather", samples.PEOPLE_FEATHER, None, id="feather"),
     pytest.param("book.xlsx", samples.WORKBOOK, "Sales", id="excel-sheet"),
     pytest.param("show.db", samples.SQLITE_SHOWCASE, "people", id="sqlite-table"),
+    pytest.param("mixed.db", samples.SQLITE_MIXED, "t", id="sqlite-mixed-types"),
 ]
 
 
@@ -82,6 +83,7 @@ def test_exported_file_reads_back_as_the_same_dataset(name, data, part, target):
             "img",
             id="sqlite-blob",
         ),
+        pytest.param("mixed.db", samples.SQLITE_MIXED, "t", "code", id="sqlite-mixed-types"),
         pytest.param(
             "prices.csv",
             b"price\n" + b"".join(b"%d\n" % i for i in range(40)) + b"12 kg\n",
@@ -102,7 +104,7 @@ def test_export_warns_about_what_the_loader_changed(name, data, part, column):
     How: reads each file as the Load page does and checks a warning quotes the column.
     """
     dataset, _ = _read(name, data, part)
-    messages = export.export_warnings(dataset, "out.parquet", "Parquet", slow_rows=10**9)
+    messages = export.export_warnings(dataset, "out.parquet")
     assert any(f"'{column}'" in message for message in messages), messages
 
 

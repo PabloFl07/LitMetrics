@@ -7,9 +7,9 @@ whose name needs quoting, a view and an empty table.
 import pandas as pd
 import pytest
 from fixtures import files
-from fixtures.samples import SQLITE_AB, SQLITE_SHOWCASE
+from fixtures.samples import SQLITE_AB, SQLITE_MIXED, SQLITE_SHOWCASE
 
-from litmetrics.core.io.base import BINARY_AS_SIZE, ReadError, Source
+from litmetrics.core.io.base import BINARY_AS_SIZE, MIXED_AS_TEXT, ReadError, Source
 from litmetrics.core.io.sqlite_loader import (
     SqliteLoader,
     SqliteOptions,
@@ -143,6 +143,20 @@ def test_blobs_become_their_size():
     assert list(dataset.df["image"].fillna("-")) == ["<3 bytes>", "-", "text"]
     assert dataset.details["binary columns"] == "image (shown as their size)"
     assert dataset.changed == {"image": BINARY_AS_SIZE}
+
+
+def test_column_of_several_types_is_kept_as_text():
+    """A column holding numbers and text is read as text, missing values kept, and noted.
+
+    Case: SQLite does not type columns, so pandas gives an ``object`` column of ints and
+    strings; exporting it to Parquet or Feather fails ("Could not convert 'A-7'").
+    Affects: core/io/sqlite_loader.py (_mixed_to_text)
+    How: reads ``SQLITE_MIXED`` and checks the values, the missing one and ``changed``.
+    """
+    dataset = _load(SQLITE_MIXED)
+    assert list(dataset.df["code"].fillna("-")) == ["10", "A-7", "-", "2.5"]
+    assert dataset.df["id"].tolist() == [1, 2, 3, 4]
+    assert dataset.changed == {"code": MIXED_AS_TEXT}
 
 
 # Errors

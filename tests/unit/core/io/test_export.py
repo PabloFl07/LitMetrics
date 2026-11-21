@@ -156,11 +156,13 @@ def test_clean_dataset_has_no_warnings():
 
     Case: a warning shown on every export teaches the user to ignore it.
     Affects: core/io/export.py (export_warnings)
-    How: asks the warnings of a 2-row dataset with nothing unparsed or changed, for each format.
+    How: asks the warnings and the time notice of a 2-row dataset with nothing unparsed or
+    changed, for each format.
     """
     dataset = _dataset(pd.DataFrame({"a": [1, 2]}))
+    assert export.export_warnings(dataset, "data.csv") == ()
     for name in _NAMES:
-        assert export.export_warnings(dataset, "data.csv", name, slow_rows=10) == ()
+        assert export.slow_export(dataset, name, slow_seconds=10, timeout_seconds=180) is None
 
 
 @pytest.mark.parametrize(
@@ -188,7 +190,7 @@ def test_unparsed_values_are_warned(values, unparsed, expected):
     How: gives a numeric or a date column with ``unparsed`` counts and reads the message.
     """
     dataset = _dataset(pd.DataFrame({"price": values}), unparsed=unparsed)
-    assert export.export_warnings(dataset, "data.csv", "Parquet", slow_rows=10) == (expected,)
+    assert export.export_warnings(dataset, "data.csv") == (expected,)
 
 
 def test_columns_with_the_same_change_are_warned_together():
@@ -205,7 +207,7 @@ def test_columns_with_the_same_change_are_warned_together():
         unparsed={"n": 0},
         changed={"img": BINARY_AS_SIZE, "t": "times of day kept as text", "doc": BINARY_AS_SIZE},
     )
-    assert export.export_warnings(dataset, "data.csv", "CSV", slow_rows=10) == (
+    assert export.export_warnings(dataset, "data.csv") == (
         f"'img', 'doc': {BINARY_AS_SIZE}, not as in the original file.",
         "'t': times of day kept as text, not as in the original file.",
     )
@@ -231,27 +233,99 @@ def test_unsafe_file_name_is_warned(file_name, warned):
     How: asks the warnings for each file name and checks whether the file name is quoted.
     """
     dataset = _dataset(pd.DataFrame({"a": [1]}))
-    messages = export.export_warnings(dataset, file_name, "CSV", slow_rows=10)
+    messages = export.export_warnings(dataset, file_name)
     assert any(file_name in message for message in messages) is warned
 
 
+def test_csv_estimate_counts_floats_as_the_slow_columns():
+    """A float column is estimated slower to write as CSV than an integer or a text one.
+
+    Case: an estimate from the row count alone says a wide table of floats is fast, and the
+    user waits minutes with no warning (floats are written ~5 times slower).
+    Affects: core/io/export.py (csv_seconds)
+    How: estimates frames of the same length with a float, an integer and a text column, and
+    one with two float columns.
+    """
+    rows = 1_000
+
+    def seconds(values) -> float:
+        return export.csv_seconds(pd.DataFrame({"a": values}))
+
+    floats, ints, text = seconds([0.5] * rows), seconds([1] * rows), seconds(["x"] * rows)
+    assert floats > ints * 3 and floats > text * 3
+    two = export.csv_seconds(pd.DataFrame({"a": [0.5] * rows, "b": [0.5] * rows}))
+    assert two == pytest.approx(2 * floats)
+
+
 @pytest.mark.parametrize(
-    ("name", "rows", "warned"),
-    [("CSV", 9, False), ("CSV", 10, True), ("Parquet", 10, False), ("Feather", 10, False)],
+    ("name", "slow_factor", "expected"),
+    [
+        ("CSV", 1.01, None),
+        ("CSV", 1.0, "slow"),
+        ("Parquet", 0.0, None),
+        ("Feather", 0.0, None),
+    ],
     ids=["csv-below", "csv-at-limit", "parquet", "feather"],
 )
-def test_slow_format_is_warned_from_the_limit(name, rows, warned):
-    """Only a slow format (CSV), and only from ``slow_rows`` rows, gets the size warning.
+def test_only_a_slow_format_past_the_limit_is_announced(name, slow_factor, expected):
+    """Only a slow format (CSV), and only from ``slow_seconds``, gets the time notice.
 
-    Case: a 3 M-row CSV takes 20 s with no sign of progress and the user clicks again; or the
-    warning shows for fast formats or small datasets.
-    Affects: core/io/export.py (export_warnings, ExportFormat.slow)
-    How: asks the warnings with ``slow_rows=10`` around the limit and checks the message.
+    Case: the notice shows for fast formats or quick exports (and is learnt to be ignored),
+    or a long CSV export gets none and the user clicks Download again and again.
+    Affects: core/io/export.py (slow_export, csv_seconds, ExportFormat.slow)
+    How: puts ``slow_seconds`` just above and at the estimate of a small frame.
     """
-    dataset = _dataset(pd.DataFrame({"a": range(rows)}))
-    messages = export.export_warnings(dataset, "data.csv", name, slow_rows=10)
-    expected = (f"Writing {rows:,} rows as CSV takes a while: Parquet or Feather are much faster.",)
-    assert messages == (expected if warned else ())
+    dataset = _dataset(pd.DataFrame({"a": [0.5] * 100}))
+    estimate = export.csv_seconds(dataset.df)
+    slow = export.slow_export(
+        dataset, name, slow_seconds=estimate * slow_factor, timeout_seconds=estimate * 10
+    )
+    assert (slow is not None) == (expected is not None)
+
+
+@pytest.mark.parametrize(
+    ("timeout_factor", "may_fail", "says"),
+    [
+        (3.0, False, "the button spins until the file is ready"),
+        (1.5, True, "the download may fail"),
+        (0.9, True, "the download will probably fail"),
+    ],
+    ids=["slow", "near-timeout", "past-timeout"],
+)
+def test_slow_export_says_when_the_browser_may_give_up(timeout_factor, may_fail, says):
+    """Close to the time the browser waits for the file, the notice says the download may fail.
+
+    Case: a CSV export longer than Streamlit's 180 s download timeout is announced as merely
+    slow; the user waits minutes and gets "Failed to generate file" with no explanation.
+    Affects: core/io/export.py (slow_export)
+    How: sets the timeout around the estimate of a small frame and reads the notice.
+    """
+    dataset = _dataset(pd.DataFrame({"a": [0.5] * 100}))
+    estimate = export.csv_seconds(dataset.df)
+    slow = export.slow_export(
+        dataset, "CSV", slow_seconds=0, timeout_seconds=estimate * timeout_factor
+    )
+    assert slow is not None
+    assert slow.may_fail is may_fail
+    assert says in slow.message
+    assert "100 rows and 1 column" in slow.message
+    assert "Parquet or Feather" in slow.message
+
+
+@pytest.mark.parametrize(
+    ("seconds", "text"),
+    [(0.8, "5 s"), (21.0, "25 s"), (59.5, "60 s"), (95.0, "2 min"), (250.0, "4 min")],
+    ids=["minimum", "rounded-up", "under-a-minute", "minutes-rounded", "minutes"],
+)
+def test_estimate_is_rounded_for_the_user(seconds, text):
+    """Estimates are shown rounded: seconds up to the next 5, then whole minutes.
+
+    Case: "about 0.83 s" or "about 250.0 s", or seconds rounded down so the user thinks the
+    download hangs before the time announced.
+    Affects: core/io/export.py (duration_text)
+    How: formats estimates around each step.
+    """
+    assert export.duration_text(seconds) == text
 
 
 def test_report_lists_each_lost_value_by_row_then_column():

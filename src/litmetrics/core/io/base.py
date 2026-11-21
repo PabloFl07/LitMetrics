@@ -36,6 +36,8 @@ class Source:
 # What a loader did to the values of a column (``LoadedDataset.changed``), shared by formats.
 BINARY_AS_SIZE = "binary values replaced by their size"
 TIME_AS_TEXT = "times of day kept as text"
+# Cells of several types (numbers and text) in one column: no typed format can hold them.
+MIXED_AS_TEXT = "values of several types kept as text"
 
 
 # eq=False: comparing two datasets would compare their DataFrames, which is ambiguous in pandas.

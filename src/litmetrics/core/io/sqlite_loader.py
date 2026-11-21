@@ -12,6 +12,10 @@ database: while reading, the file is in memory twice. The connection is read-onl
 BLOB values (images, serialized objects...) cannot be profiled or shown: each one becomes a
 text with its size (``"<1,024 bytes>"``), and the columns that had them are listed in
 ``LoadedDataset.details``.
+
+SQLite does not type its columns: one column can hold numbers and text. Such a column is kept
+as text (``MIXED_AS_TEXT``), as the Excel loader does: no typed format (Parquet, Feather) can
+write a column of several types, so exporting it would fail.
 """
 
 import sqlite3
@@ -21,7 +25,13 @@ from dataclasses import dataclass, replace
 
 import pandas as pd
 
-from litmetrics.core.io.base import BINARY_AS_SIZE, LoadedDataset, ReadError, Source
+from litmetrics.core.io.base import (
+    BINARY_AS_SIZE,
+    MIXED_AS_TEXT,
+    LoadedDataset,
+    ReadError,
+    Source,
+)
 
 # Name of the format, shown to the user.
 FORMAT_NAME = "SQLite"
@@ -113,10 +123,12 @@ class SqliteLoader:
             raise ReadError(f"Table '{table}' of '{name}' has no data rows.")
         df.columns = [str(column) for column in df.columns]
         df, binary = _describe_blobs(df)
+        # After the blobs: a BLOB column with numbers is mixed once its blobs are text.
+        df, mixed = _mixed_to_text(df)
         details = {PART_LABEL.lower(): table}
         if binary:
             details["binary columns"] = ", ".join(binary) + " (shown as their size)"
-        changed = dict.fromkeys(binary, BINARY_AS_SIZE)
+        changed = dict.fromkeys(mixed, MIXED_AS_TEXT) | dict.fromkeys(binary, BINARY_AS_SIZE)
         return LoadedDataset(df, name, FORMAT_NAME, details, changed=changed)
 
 
@@ -203,6 +215,24 @@ def _describe_blobs(df: pd.DataFrame) -> tuple[pd.DataFrame, tuple[str, ...]]:
         for column in binary
     }
     return df.assign(**described), binary
+
+
+def _mixed_to_text(df: pd.DataFrame) -> tuple[pd.DataFrame, tuple[str, ...]]:
+    """Turn the columns whose values have several types into text. Missing stays missing.
+
+    Returns:
+        The new DataFrame, and the names of the columns turned into text.
+    """
+    mixed = tuple(
+        column
+        for column in df.columns
+        # A column of one plain type gets its own dtype: only ``object`` ones can mix.
+        if df[column].dtype == object and len(set(map(type, df[column].dropna()))) > 1
+    )
+    if not mixed:
+        return df, ()
+    text = {c: df[c].astype("str").where(df[c].notna()) for c in mixed}
+    return df.assign(**text), mixed
 
 
 def _quote(identifier: str) -> str:

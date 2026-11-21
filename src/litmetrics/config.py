@@ -59,9 +59,13 @@ class LoadConfig:
 class ExportConfig:
     """Settings of the Export dialog of the sidebar."""
 
-    # From this many rows, exporting to a slow format (CSV) shows a warning before the
-    # download. CSV took 19.8 s for 3.1 M rows, against 0.6 s for Parquet (housing x 150).
-    slow_rows: int = 1_000_000
+    # Estimated seconds (export.csv_seconds) from which exporting to a slow format (CSV) shows
+    # how long it takes. CSV took 19.8 s for 3.1 M rows, against 0.6 s for Parquet.
+    slow_seconds: float = 10.0
+    # Seconds the browser waits for the file of a download button before failing. Fixed by
+    # Streamlit's frontend (180 s in 1.66, not configurable): from half of it, the warning says
+    # the download may fail.
+    download_timeout_seconds: float = 180.0
     # Lines of the problem report shown in the dialog; the downloaded report has them all.
     report_preview_rows: int = 200
 

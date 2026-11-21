@@ -8,15 +8,17 @@ the loader guesses them again from the text (CSV).
 
 Before downloading, ``export_warnings`` tells the user what the file will not hold as in the
 original: values the app could not read, values changed by the loader (binary data replaced by
-its size...), a file name some systems refuse, and a slow conversion. Known limits of this
-release, to be fixed later; for now the user is warned. For the values that will be empty,
-``unparsed_report`` lists each one with its row and its text in the original file, so the user
-can find and fix them there.
+its size...) and a file name some systems refuse. ``slow_export`` estimates how long a slow
+format (CSV) takes to write the dataset, and whether the browser may give up waiting for it.
+Known limits of this release, to be fixed later; for now the user is warned. For the values
+that will be empty, ``unparsed_report`` lists each one with its row and its text in the
+original file, so the user can find and fix them there.
 
 The DataFrame is only read, never changed: it is the shared, cached dataset.
 """
 
 import io
+import math
 import re
 from collections.abc import Callable
 from dataclasses import dataclass
@@ -46,7 +48,7 @@ class ExportFormat:
         mime: MIME type of the file, for the browser.
         write: Returns the bytes of the file holding the DataFrame, without its index.
         slow: Whether it writes value by value as text, so a large dataset takes a while
-            (``export_warnings`` warns from ``ExportConfig.slow_rows``).
+            (``slow_export`` estimates how long).
     """
 
     name: str
@@ -191,28 +193,20 @@ def _expected(column: pd.Series) -> str:
     return "date" if ptypes.is_datetime64_any_dtype(column) else "number"
 
 
-def export_warnings(
-    dataset: LoadedDataset, file_name: str, name: str, slow_rows: int
-) -> tuple[str, ...]:
-    """What the user should know before downloading ``dataset`` as format ``name``.
+def export_warnings(dataset: LoadedDataset, file_name: str) -> tuple[str, ...]:
+    """What the user should know before downloading ``dataset``, in any format.
 
-    Only looks at what the loader recorded and at the size: no row is read, so it is cheap
-    on every rerun.
+    Only looks at what the loader recorded: no row is read, so it is cheap on every rerun. How
+    long the file takes to write is ``slow_export``.
 
     Args:
         dataset: The dataset to export, as loaded (with ``unparsed`` and ``changed``).
         file_name: Name the file will be downloaded with (``export_file_name``).
-        name: Name of the export format.
-        slow_rows: Rows from which a slow format gets a warning (``ExportConfig.slow_rows``).
 
     Returns:
         Messages for the user, most serious first: values written empty, values changed by
-        the loader, an unsafe file name, a slow conversion. Empty when there is nothing to say.
-
-    Raises:
-        ValueError: No export format has that name.
+        the loader, an unsafe file name. Empty when there is nothing to say.
     """
-    fmt = export_format(name)
     messages: list[str] = []
     for column, count in dataset.unparsed.items():
         if count and column in dataset.df.columns:
@@ -233,10 +227,98 @@ def export_warnings(
             f"'{file_name}' has characters some systems refuse in file names: "
             "your browser may change them."
         )
-    if fmt.slow and dataset.n_rows >= slow_rows:
-        faster = " or ".join(f.name for f in EXPORT_FORMATS if not f.slow)
-        messages.append(
-            f"Writing {dataset.n_rows:,} rows as {fmt.name} takes a while: {faster} are much "
-            "faster."
-        )
     return tuple(messages)
+
+
+# Values written per second as CSV by ``_write_csv``, by kind of column. Measured with pandas 3
+# on 1 M rows (scratch benchmark, Nov 2026): floats 0.9-1.4 M/s depending on their digits (the
+# 3.1 M-row housing x 150 took 19.8 s), dates 2.4 M/s, integers 5.9 M/s, text 7.7 M/s,
+# booleans 8.4 M/s. A slower or busier server takes longer: the estimate is shown as "about".
+_CSV_FLOATS_PER_SECOND = 1.2e6
+_CSV_DATES_PER_SECOND = 2.4e6
+_CSV_OTHER_PER_SECOND = 6e6
+
+
+def csv_seconds(df: pd.DataFrame) -> float:
+    """Estimated seconds ``_write_csv`` takes to write ``df``, from its size and dtypes.
+
+    Reads no value: cheap on every rerun. Floats dominate: they are written ~5 times slower
+    than integers or text.
+    """
+    seconds = 0.0
+    for dtype in df.dtypes:
+        if ptypes.is_float_dtype(dtype):
+            rate = _CSV_FLOATS_PER_SECOND
+        elif ptypes.is_datetime64_any_dtype(dtype):
+            rate = _CSV_DATES_PER_SECOND
+        else:
+            rate = _CSV_OTHER_PER_SECOND
+        seconds += len(df) / rate
+    return seconds
+
+
+@dataclass(frozen=True)
+class SlowExport:
+    """Warning that writing the file takes long, from ``slow_export``.
+
+    Attributes:
+        message: Text for the user: how long, what the download button does meanwhile, and
+            the faster formats.
+        may_fail: The estimate is close to or past the time the browser waits for the file:
+            the download may fail, not just be slow.
+    """
+
+    message: str
+    may_fail: bool
+
+
+def slow_export(
+    dataset: LoadedDataset, name: str, slow_seconds: float, timeout_seconds: float
+) -> SlowExport | None:
+    """How long writing ``dataset`` as format ``name`` takes, when it is long enough to say.
+
+    Args:
+        dataset: The dataset to export.
+        name: Name of the export format.
+        slow_seconds: Estimated seconds from which the user is warned
+            (``ExportConfig.slow_seconds``).
+        timeout_seconds: Seconds the browser waits for the file before failing the download
+            (``ExportConfig.download_timeout_seconds``). From half of it, the download may fail.
+
+    Returns:
+        ``None`` for a fast format or an estimate under ``slow_seconds``.
+
+    Raises:
+        ValueError: No export format has that name.
+    """
+    fmt = export_format(name)
+    if not fmt.slow:
+        return None
+    seconds = csv_seconds(dataset.df)
+    if seconds < slow_seconds:
+        return None
+    columns = "column" if dataset.n_cols == 1 else "columns"
+    size = f"{dataset.n_rows:,} rows and {dataset.n_cols:,} {columns}"
+    faster = " or ".join(f.name for f in EXPORT_FORMATS if not f.slow)
+    took = f"Writing {size} as {fmt.name} takes about {duration_text(seconds)}"
+    if seconds >= timeout_seconds / 2:
+        chance = "will probably fail" if seconds >= timeout_seconds else "may fail"
+        message = (
+            f"{took}. Your browser stops waiting for the file after "
+            f"{duration_text(timeout_seconds)}, so the download {chance}. "
+            f"Use {faster} instead: they take a few seconds."
+        )
+        return SlowExport(message, may_fail=True)
+    message = (
+        f"{took}. After you click Download, the button spins until the file is ready: keep "
+        f"this dialog open and do not click again. {faster} take a few seconds."
+    )
+    return SlowExport(message, may_fail=False)
+
+
+def duration_text(seconds: float) -> str:
+    """``seconds`` rounded for an estimate, shown after "about": "25 s", "3 min"."""
+    if seconds < 60:
+        # Up to the next 5 s: an estimate below the real time makes the user click again.
+        return f"{max(5, math.ceil(seconds / 5) * 5)} s"
+    return f"{round(seconds / 60)} min"
