@@ -331,6 +331,7 @@ class ColumnHints:
             column that is not drawn. Only columns with fewer than two values are missing.
         partial: Columns whose ``values`` are only the most frequent ones of a sample (free
             text, identifiers): other values exist and can be typed in.
+        integer: Columns filtered by range that hold integers: their filter steps by 1.
     """
 
     order: tuple[str, ...] = ()
@@ -346,6 +347,7 @@ class ColumnHints:
     date_ranges: tuple[tuple[str, str, str], ...] = ()
     filters: tuple[tuple[str, str], ...] = ()
     partial: tuple[str, ...] = ()
+    integer: tuple[str, ...] = ()
 
     def columns_for(self, accepts: Accepts) -> tuple[str, ...]:
         """Columns of the types ``accepts``, in dataset order."""
@@ -418,6 +420,7 @@ def column_hints(df: pd.DataFrame, schema: Schema) -> ColumnHints:
     """
     left_out: list[tuple[str, str]] = []
     numeric: list[str] = []
+    integer: list[str] = []
     ranges: list[tuple[str, float, float]] = []
     for name in schema.names_of([SemanticType.NUMERIC]):
         column = df[name]
@@ -430,6 +433,8 @@ def column_hints(df: pd.DataFrame, schema: Schema) -> ColumnHints:
             continue
         # A row number is no axis, but a range of rows is a filter ("rows 1 to 1,000").
         ranges.append((name, float(low), float(high)))
+        if ptypes.is_integer_dtype(column):
+            integer.append(name)
         if _is_row_number(column, float(low), float(high)):
             left_out.append((name, "row number"))
         else:
@@ -475,6 +480,8 @@ def column_hints(df: pd.DataFrame, schema: Schema) -> ColumnHints:
         filter_types[name], extent = found
         if filter_types[name] == "range":
             ranges.append((name, *extent))
+            if ptypes.is_integer_dtype(df[name]):
+                integer.append(name)
         else:
             values.append((name, extent))
             partial.append(name)
@@ -499,6 +506,7 @@ def column_hints(df: pd.DataFrame, schema: Schema) -> ColumnHints:
             (c.name, filter_types[c.name]) for c in schema.columns if c.name in filter_types
         ),
         partial=tuple(partial),
+        integer=tuple(integer),
     )
 
 

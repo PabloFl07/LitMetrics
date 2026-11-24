@@ -19,6 +19,7 @@ kept with ``state.kept_widget`` and come back when the kind is drawn again.
 
 import datetime as dt
 import json
+import math
 import time
 from collections.abc import Collection, Iterable
 from dataclasses import dataclass, replace
@@ -110,6 +111,22 @@ def _filter_keys(filter_id: int) -> tuple[str, str]:
     every kind: the rows are the same for all.
     """
     return _key(f"filter_{filter_id}_column"), _key(f"filter_{filter_id}_value")
+
+
+def _ends_keys(value_key: str) -> tuple[str, str]:
+    """Keys of the "From" and "To" inputs of a range filter whose slider is ``value_key``."""
+    return f"{value_key}_low", f"{value_key}_high"
+
+
+def _value_keys(value_key: str) -> list[str]:
+    """Every widget of the values of a filter: the slider or picker, and the range inputs."""
+    return [value_key, *_ends_keys(value_key)]
+
+
+def _all_filter_keys(filter_id: int) -> list[str]:
+    """Every widget of filter ``filter_id``: its column and its values."""
+    column_key, value_key = _filter_keys(filter_id)
+    return [column_key, *_value_keys(value_key)]
 
 
 def _kind_keys(kind: viz.ChartKind) -> list[str]:
@@ -380,20 +397,20 @@ def _add_filter() -> None:
     """Callback of "Add filter": a new card, without a column yet."""
     ids = state.get_chart_filters()
     new = max(ids, default=-1) + 1
-    state.forget_widgets(_filter_keys(new))
+    state.forget_widgets(_all_filter_keys(new))
     state.set_chart_filters((*ids, new))
 
 
 def _remove_filter(filter_id: int) -> None:
     """Callback of the close button of a card: the filter and its widgets are gone."""
-    state.forget_widgets(_filter_keys(filter_id))
+    state.forget_widgets(_all_filter_keys(filter_id))
     state.set_chart_filters(i for i in state.get_chart_filters() if i != filter_id)
 
 
 def _drop_filters() -> None:
     """Every filter and its widgets are gone. From a callback."""
     for filter_id in state.get_chart_filters():
-        state.forget_widgets(_filter_keys(filter_id))
+        state.forget_widgets(_all_filter_keys(filter_id))
     state.set_chart_filters(())
 
 
@@ -426,9 +443,9 @@ def _filter_card(filter_id: int, hints: viz.ColumnHints) -> list[viz.RowFilter]:
     return []
 
 
-def _filter_column(columns: tuple[str, ...], key: str, bound_key: str) -> str | None:
+def _filter_column(columns: tuple[str, ...], key: str, value_key: str) -> str | None:
     """Selector of the column a filter applies to (None: no filter yet). Changing it drops the
-    values picked for the previous column (``bound_key``).
+    values picked for the previous column (the widgets of ``value_key``).
     """
     state.restore_widget(key)
     if state.get_widget(key) not in (None, *columns):
@@ -440,7 +457,7 @@ def _filter_column(columns: tuple[str, ...], key: str, bound_key: str) -> str | 
         format_func=lambda v: "Pick a column" if v is None else str(v),
         placeholder="Pick a column",
         on_change=state.forget_widgets,
-        args=([bound_key],),
+        args=(_value_keys(value_key),),
     )
     state.remember_widget(key, column)
     return column
@@ -496,11 +513,91 @@ def _values_filter(hints: viz.ColumnHints, column: str, values_key: str) -> list
     return [viz.ValuesFilter(column, tuple(str(v) for v in values))]
 
 
-def _range_filter(hints: viz.ColumnHints, column: str, range_key: str) -> list[viz.RowFilter]:
+# Most and fewest decimals of the "From" / "To" inputs of a decimal column, and how many
+# more than the order of magnitude of its range: a range of 70 (10^1) gets 4 - 1 = 3.
+_MAX_DECIMALS = 6
+_MIN_DECIMALS = 2
+_EXTRA_DECIMALS = 4
+
+
+def _range_scale(
+    hints: viz.ColumnHints, column: str
+) -> tuple[int | float, int | float, int | float, str | None]:
+    """Ends of the range filter of ``column``, the step of its widgets and their format.
+
+    An integer column steps by 1 with integer ends (Streamlit wants every number of a widget
+    of one type). A decimal one gets more decimals the narrower its range: ``20`` to ``90``
+    gets 3, ``0.0012`` to ``0.0098`` 6, ``10,000`` to ``90,000`` 2.
+    """
     low, high = hints.range_of(column)
-    picked_low, picked_high = state.kept_widget(
-        st.slider, "Between", low, high, key=range_key, default=(low, high)
+    if column in hints.integer:
+        return int(low), int(high), 1, None
+    decimals = _EXTRA_DECIMALS - math.floor(math.log10(high - low))
+    decimals = min(_MAX_DECIMALS, max(_MIN_DECIMALS, decimals))
+    return low, high, 10.0**-decimals, f"%.{decimals}f"
+
+
+def _range_from_slider(value_key: str) -> None:
+    """Callback of the slider of a range filter: "From" and "To" follow it."""
+    low_key, high_key = _ends_keys(value_key)
+    start, end = state.get_widget(value_key)
+    state.put_widget(low_key, start)
+    state.put_widget(high_key, end)
+
+
+def _range_from_inputs(value_key: str) -> None:
+    """Callback of "From" / "To": the slider follows them. Typed the wrong way round, they
+    are swapped instead of leaving no row.
+    """
+    low_key, high_key = _ends_keys(value_key)
+    start, end = sorted((state.get_widget(low_key), state.get_widget(high_key)))
+    _put_range(value_key, start, end)
+
+
+def _put_range(value_key: str, start: float, end: float) -> None:
+    """Set the slider and the inputs of a range filter. From a callback."""
+    low_key, high_key = _ends_keys(value_key)
+    state.put_widget(value_key, (start, end))
+    state.put_widget(low_key, start)
+    state.put_widget(high_key, end)
+
+
+def _range_filter(hints: viz.ColumnHints, column: str, value_key: str) -> list[viz.RowFilter]:
+    """A slider to pick a range quickly and "From" / "To" inputs to type its exact ends, kept
+    in sync by their callbacks. The slider holds the range the filter uses.
+    """
+    low, high, step, fmt = _range_scale(hints, column)
+    low_key, high_key = _ends_keys(value_key)
+    state.restore_widget(value_key, (low, high))
+    state.restore_widget(low_key, state.get_widget(value_key)[0])
+    state.restore_widget(high_key, state.get_widget(value_key)[1])
+    picked_low, picked_high = st.slider(
+        "Between",
+        low,
+        high,
+        key=value_key,
+        step=step,
+        format=fmt,
+        on_change=_range_from_slider,
+        args=(value_key,),
     )
+    # Keyed for the stylesheet, which hides the +/- of these inputs (docs/styling.md).
+    with st.container(key=f"viz_range_ends_{value_key}"):
+        ends = st.columns(2, gap="small")
+    for column_box, (label, key) in zip(ends, (("From", low_key), ("To", high_key)), strict=True):
+        with column_box:
+            value = st.number_input(
+                label,
+                low,
+                high,
+                key=key,
+                step=step,
+                format=fmt,
+                on_change=_range_from_inputs,
+                args=(value_key,),
+            )
+            state.remember_widget(key, value)
+    state.remember_widget(value_key, (picked_low, picked_high))
     if (picked_low, picked_high) == (low, high):
         return []
     return [
@@ -748,10 +845,11 @@ def _apply_filters(filters: Iterable[viz.RowFilter], hints: viz.ColumnHints) -> 
                 partial = column in hints.partial
                 state.put_widget(value_key, [v for v in values if partial or v in options])
             case viz.RangeFilter(column=column, low=low, high=high):
-                lo, hi = hints.range_of(column)
-                begin = lo if low is None else min(max(low, lo), hi)
-                finish = hi if high is None else min(max(high, lo), hi)
-                state.put_widget(value_key, (min(begin, finish), max(begin, finish)))
+                lo, hi, _, _ = _range_scale(hints, column)
+                # Of the type of the widget: an integer column takes integers.
+                begin = lo if low is None else type(lo)(min(max(low, lo), hi))
+                finish = hi if high is None else type(hi)(min(max(high, lo), hi))
+                _put_range(value_key, min(begin, finish), max(begin, finish))
     state.set_chart_filters(ids)
 
 

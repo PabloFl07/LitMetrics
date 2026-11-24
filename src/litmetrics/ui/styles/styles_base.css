@@ -120,3 +120,12 @@ span[data-testid="stMarkdownBadge"] {
 a[data-testid="stPageLink-NavLink"]:hover {
   background-color: var(--lm-accent-soft);
 }
+
+/* ---------- Range filter of Visualization ------------------------------------------------
+ * "From" / "To" are typed: their +/- buttons would step by 0.001 over a range of thousands,
+ * and without them both inputs fit side by side in the narrow editor.
+ */
+[class*="st-key-viz_range_ends_"] [data-testid="stNumberInputStepUp"],
+[class*="st-key-viz_range_ends_"] [data-testid="stNumberInputStepDown"] {
+  display: none;
+}
