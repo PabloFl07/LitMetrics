@@ -631,11 +631,19 @@ def _config_actions(
         args=(spec.kind,),
         help=f"Back to the starting options of the {spec.kind} chart, filters included.",
     )
-    with st.popover("Save / load", icon=":material/save:"):
+    # Stretched: next to "Reset" in a narrow editor, a content-width label was cut short.
+    with st.popover("Save / load", icon=":material/save:", width="stretch"):
+        name = state.kept_widget(
+            st.text_input,
+            "File name",
+            key="viz_config_name",
+            placeholder=f"chart_{spec.kind}",
+            help="Saved as JSON; “.json” is added if missing.",
+        )
         st.download_button(
             "Save configuration",
             _config_json(spec, chart_style, _auto_title(spec, hints)),
-            file_name=f"chart_{spec.kind}.json",
+            file_name=viz.config_file_name(name, spec.kind),
             mime="application/json",
             icon=":material/download:",
             on_click="ignore",
@@ -793,11 +801,20 @@ def _chart(
     )
     if table_box.open:
         with table_box:
-            _data_table(spec, data, data_ms, option_ms)
+            _data_table(dataset_id, df, spec, data, data_ms, option_ms)
 
 
-def _data_table(spec: viz.DataSpec, data: viz.ChartData, data_ms: float, option_ms: float) -> None:
-    """The rows the chart was drawn from, and a CSV built only when it is downloaded."""
+def _data_table(
+    dataset_id: str,
+    df: pd.DataFrame,
+    spec: viz.DataSpec,
+    data: viz.ChartData,
+    data_ms: float,
+    option_ms: float,
+) -> None:
+    """The rows the chart was drawn from, and a CSV built only when it is downloaded. With
+    filters, also the same chart data without them: the table stays the filtered one.
+    """
     table = viz.to_frame(data)
     if VisualizeConfig.show_timings:
         st.caption(
@@ -805,12 +822,31 @@ def _data_table(spec: viz.DataSpec, data: viz.ChartData, data_ms: float, option_
             f"time) · option {option_ms:.1f} ms"
         )
     st.dataframe(table, height=260, hide_index=True)
-    st.download_button(
-        "Download CSV",
-        # A callable runs only on click, in its own thread: no CSV is built on every rerun.
-        lambda: table.to_csv(index=False).encode(),
-        file_name=f"{spec.kind}_{spec.x or spec.value}.csv",
-        mime="text/csv",
-        icon=":material/download:",
-        on_click="ignore",
-    )
+    stem = f"{spec.kind}_{spec.x or spec.value}"
+    with st.container(horizontal=True):
+        st.download_button(
+            "Download CSV",
+            # A callable runs only on click, in its own thread: no CSV is built on every rerun.
+            lambda: table.to_csv(index=False).encode(),
+            file_name=f"{stem}.csv",
+            mime="text/csv",
+            icon=":material/download:",
+            on_click="ignore",
+        )
+        if spec.filters:
+            unfiltered = replace(spec, filters=())
+            st.download_button(
+                "Download unfiltered",
+                # Aggregated only on click (cached like any chart): every row, as if the
+                # filters were removed, while the table and the chart keep them.
+                lambda: (
+                    viz.to_frame(cache.chart_data(dataset_id, df, unfiltered))
+                    .to_csv(index=False)
+                    .encode()
+                ),
+                file_name=f"{stem}_unfiltered.csv",
+                mime="text/csv",
+                icon=":material/filter_alt_off:",
+                on_click="ignore",
+                help="The same chart data without the filters: every row is counted.",
+            )

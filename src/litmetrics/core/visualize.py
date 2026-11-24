@@ -20,6 +20,7 @@ only gives it what to offer and where to start:
 """
 
 import datetime as dt
+import re
 from collections.abc import Collection, Mapping, Sequence
 from dataclasses import asdict, dataclass, field, fields, replace
 from enum import StrEnum
@@ -620,6 +621,23 @@ def _value_name(spec: DataSpec) -> str:
 
 
 # Configuration as JSON
+
+
+# Characters Windows, macOS or Linux refuse in a file name, and runs of them, replaced by "_".
+_UNSAFE_FILE_CHARS = re.compile(r'[<>:"/\\|?*\x00-\x1f]+')
+
+
+def config_file_name(name: str, kind: ChartKind) -> str:
+    """File name of a saved configuration: ``name`` as typed, made safe, with ``.json``.
+
+    An empty name gives ``chart_<kind>.json``; a name that already ends in ``.json`` does not
+    get it twice; characters some systems refuse (``/``, ``:``...) become ``_``.
+    """
+    stem = name.strip()
+    if stem.lower().endswith(".json"):
+        stem = stem[: -len(".json")]
+    stem = _UNSAFE_FILE_CHARS.sub("_", stem).strip(" .")
+    return f"{stem or f'chart_{kind}'}.json"
 
 
 def spec_to_dict(spec: DataSpec) -> dict[str, Any]:
