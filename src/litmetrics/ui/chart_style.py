@@ -87,6 +87,8 @@ class StyleSpec:
         legend: Show the legend (on top). Only drawn with more than one series, or for a pie.
         labels: Values written on bars, slices, points and cells.
         horizontal: Bars and boxes along the y axis.
+        color_each: Boxplot: each box takes the next color of the palette, instead of all of
+            them the first one.
         stack: Series of bars, lines and histograms stacked instead of side by side.
         sort: Order of the bars: as computed (most frequent first, or intervals in order), by
             value, or by label (numeric when every label is a number, natural otherwise).
@@ -107,6 +109,7 @@ class StyleSpec:
     legend: bool = True
     labels: bool = False
     horizontal: bool = False
+    color_each: bool = False
     stack: bool = False
     sort: SortOrder = "data"
     smooth: bool = False
@@ -546,20 +549,23 @@ def _scatter(data: ChartData, style: StyleSpec, colors: ChartColors) -> dict[str
 
 
 def _boxplot(data: ChartData, style: StyleSpec, colors: ChartColors) -> dict[str, Any]:
-    color = style.palette[0] if style.palette else colors.accent
+    palette = style.palette or (colors.accent,)
     boxes = data.series[0].data if data.series else ()
-    items = [
-        {
-            "value": list(box),
-            "itemStyle": {
-                "color": with_alpha(color, 0.3),
-                "borderColor": color,
-                "borderWidth": 2,
-                "opacity": _OTHER_OPACITY if data.categories[i] == data.other else 1,
-            },
-        }
-        for i, box in enumerate(boxes)
-    ]
+    items = []
+    for i, box in enumerate(boxes):
+        # Past the end of the palette the colors repeat, as ECharts does with series.
+        color = palette[i % len(palette)] if style.color_each else palette[0]
+        items.append(
+            {
+                "value": list(box),
+                "itemStyle": {
+                    "color": with_alpha(color, 0.3),
+                    "borderColor": color,
+                    "borderWidth": 2,
+                    "opacity": _OTHER_OPACITY if data.categories[i] == data.other else 1,
+                },
+            }
+        )
     horizontal = style.horizontal
     outliers = [[v, i] if horizontal else [i, v] for i, v in data.outliers]
     series = [

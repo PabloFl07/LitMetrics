@@ -12,7 +12,8 @@ only gives it what to offer and where to start:
 - ``ROLES``: for each chart kind, which columns it takes (x, y, value, group) and of which
   semantic types. The editor is generated from this table.
 - ``column_hints``: the columns that can go in a chart, in dataset order, without the ones that
-  never make a useful chart (constant, empty, row numbers), plus what the filters need.
+  never make a useful chart (constant, empty, row numbers), plus what the filters need: any
+  column with two values or more, drawn or not.
 - ``default_spec``: a reasonable first chart of a kind, never a recommendation.
 - ``spec_to_dict`` / ``spec_from_dict`` / ``fit_to_dataset``: a ``DataSpec`` as JSON, and how
   one saved from another dataset is adapted to the current one.
@@ -183,7 +184,7 @@ class ValuesFilter:
     """Rows whose value of ``column``, as text, is one of ``values``.
 
     Attributes:
-        column: Categorical or boolean column.
+        column: Categorical, boolean, free text or identifier column.
         values: Values kept, as shown in the editor (``str`` of each value).
     """
 
@@ -320,9 +321,15 @@ class ColumnHints:
         distinct: Distinct values of each categorical column.
         best_pair: The two numeric columns with the highest absolute correlation, and it.
         left_out: Columns not offered and why ("constant", "row number"...).
-        values: Values of each categorical column as text, the most frequent first.
-        ranges: Lowest and highest value of each numeric column.
+        values: Values of each column filtered by value as text, the most frequent first.
+        ranges: Lowest and highest value of each column filtered by range.
         date_ranges: First and last day of each date column, as ISO dates.
+        filters: Every column a row filter can use, in dataset order, with its filter type
+            (a key of ``_FILTER_TYPES``): the chart columns and also those never offered for
+            a chart (identifiers, free text, row numbers), since rows can be picked by a
+            column that is not drawn. Only columns with fewer than two values are missing.
+        partial: Columns whose ``values`` are only the most frequent ones of a sample (free
+            text, identifiers): other values exist and can be typed in.
     """
 
     order: tuple[str, ...] = ()
@@ -336,6 +343,8 @@ class ColumnHints:
     values: tuple[tuple[str, tuple[str, ...]], ...] = ()
     ranges: tuple[tuple[str, float, float], ...] = ()
     date_ranges: tuple[tuple[str, str, str], ...] = ()
+    filters: tuple[tuple[str, str], ...] = ()
+    partial: tuple[str, ...] = ()
 
     def columns_for(self, accepts: Accepts) -> tuple[str, ...]:
         """Columns of the types ``accepts``, in dataset order."""
@@ -348,19 +357,30 @@ class ColumnHints:
             wanted.update(self.datetime)
         return tuple(n for n in self.order if n in wanted)
 
+    @property
+    def filter_columns(self) -> tuple[str, ...]:
+        """Columns a row filter can use, in dataset order."""
+        return tuple(name for name, _ in self.filters)
+
+    def filter_type(self, name: str) -> str | None:
+        """Filter type of column ``name`` (``"dates"``, ``"values"``, ``"range"``), or None
+        if it cannot be filtered.
+        """
+        return dict(self.filters).get(name)
+
     def n_distinct(self, name: str) -> int:
         """Distinct values of categorical column ``name`` (0 if it is not one)."""
         return dict(self.distinct).get(name, 0)
 
     def values_of(self, name: str) -> tuple[str, ...]:
-        """Values of categorical column ``name`` as text (empty if it is not one)."""
+        """Values of column ``name`` filtered by value, as text (empty if it is not one)."""
         return dict(self.values).get(name, ())
 
     def range_of(self, name: str) -> tuple[float, float]:
-        """Lowest and highest value of numeric column ``name``.
+        """Lowest and highest value of column ``name``, filtered by range.
 
         Raises:
-            KeyError: ``name`` is not a usable numeric column.
+            KeyError: ``name`` is not filtered by range.
         """
         low, high = {n: (lo, hi) for n, lo, hi in self.ranges}[name]
         return low, high
@@ -406,11 +426,13 @@ def column_hints(df: pd.DataFrame, schema: Schema) -> ColumnHints:
         low, high = column.min(), column.max()
         if not low < high:
             left_out.append((name, "constant" if low == high else "no values"))
-        elif _is_row_number(column, float(low), float(high)):
+            continue
+        # A row number is no axis, but a range of rows is a filter ("rows 1 to 1,000").
+        ranges.append((name, float(low), float(high)))
+        if _is_row_number(column, float(low), float(high)):
             left_out.append((name, "row number"))
         else:
             numeric.append(name)
-            ranges.append((name, float(low), float(high)))
     categorical: list[str] = []
     distinct: dict[str, int] = {}
     dominated: dict[str, bool] = {}
@@ -439,6 +461,22 @@ def column_hints(df: pd.DataFrame, schema: Schema) -> ColumnHints:
         for c in schema.columns
         if c.semantic_type in _NOT_CHARTED
     ]
+    partial: list[str] = []
+    filter_types = {
+        **dict.fromkeys(datetime, "dates"),
+        **dict.fromkeys(categorical, "values"),
+        **{name: "range" for name, _, _ in ranges},
+    }
+    for name in schema.names_of(_NOT_CHARTED):
+        found = _filter_of_uncharted(df[name])
+        if found is None:
+            continue
+        filter_types[name], extent = found
+        if filter_types[name] == "range":
+            ranges.append((name, *extent))
+        else:
+            values.append((name, extent))
+            partial.append(name)
     usable = {*numeric, *categorical, *datetime}
     position = {c.name: i for i, c in enumerate(schema.columns)}
     ranked = sorted(
@@ -456,7 +494,31 @@ def column_hints(df: pd.DataFrame, schema: Schema) -> ColumnHints:
         values=tuple(values),
         ranges=tuple(ranges),
         date_ranges=tuple(date_ranges),
+        filters=tuple(
+            (c.name, filter_types[c.name]) for c in schema.columns if c.name in filter_types
+        ),
+        partial=tuple(partial),
     )
+
+
+def _filter_of_uncharted(column: pd.Series) -> tuple[str, Any] | None:
+    """How a column never offered for a chart (identifier, free text) is filtered: by
+    ``"range"`` with its lowest and highest number when it holds numbers, else by
+    ``"values"`` with the most frequent ones of a sample (``VisualizeConfig.filter_values``).
+    None when it has fewer than two values.
+
+    Counting the values of a sample, not of the column: an id column of 3 M rows has 3 M of
+    them, and the list only helps to pick; any value can be typed in.
+    """
+    if _is_number(column):
+        low, high = column.min(), column.max()
+        return ("range", (float(low), float(high))) if low < high else None
+    counts = sample(column, VisualizeConfig.filter_sample).value_counts()
+    counts = counts[counts > 0]
+    if len(counts) < 2:
+        return None
+    top = counts.index[: VisualizeConfig.filter_values]
+    return "values", tuple(dict.fromkeys(str(v) for v in top))
 
 
 def _is_row_number(column: pd.Series, low: float, high: float) -> bool:
@@ -711,18 +773,14 @@ def fit_to_dataset(
         elif column not in hints.columns_for(role.accepts):
             messages.append(f"{role.label}: {column!r} cannot be used here.")
             changes[name] = None
-    usable_for: dict[type[RowFilter], tuple[str, ...]] = {
-        DateFilter: hints.datetime,
-        ValuesFilter: hints.categorical,
-        RangeFilter: hints.numeric,
-    }
+    type_names = {cls: name for name, cls in _FILTER_TYPES.items()}
     filters = []
     for f in spec.filters:
         if f.column not in columns:
             messages.append(f"Filter: there is no column {f.column!r} in this dataset.")
         elif f.column in skipped:
             messages.append(f"Filter: {f.column!r} is skipped (Skip columns).")
-        elif f.column not in usable_for[type(f)]:
+        elif hints.filter_type(f.column) != type_names[type(f)]:
             messages.append(f"Filter: {f.column!r} cannot be filtered this way.")
         else:
             filters.append(f)
@@ -809,9 +867,16 @@ def _filter_mask(df: pd.DataFrame, filters: Sequence[RowFilter]) -> np.ndarray:
                     limit = pd.Timestamp(end) + pd.Timedelta(days=1)
                     keep &= (column < limit).to_numpy(dtype=bool, na_value=False)
             case ValuesFilter(values=values):
-                # Compares the few distinct values as text, not every row.
-                wanted = set(values)
-                kept = [v for v in column.dropna().unique() if str(v) in wanted]
+                if ptypes.is_string_dtype(column) and not isinstance(
+                    column.dtype, pd.CategoricalDtype
+                ):
+                    # Text is its own label: no need to list the distinct values of an id
+                    # column with millions of them.
+                    kept: Collection[Any] = values
+                else:
+                    # Compares the few distinct values as text, not every row.
+                    wanted = set(values)
+                    kept = [v for v in column.dropna().unique() if str(v) in wanted]
                 keep &= column.isin(kept).to_numpy(dtype=bool)
             case RangeFilter(low=low, high=high):
                 if low is not None:

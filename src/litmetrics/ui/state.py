@@ -32,6 +32,9 @@ State kept per browser session:
     chart_uploads  Chart configurations loaded so far in Visualization: part of the key of
                 its uploader, which gets a new key after each load so it empties.
     chart_messages  What the last chart configuration load said, shown once.
+    chart_filters  Ids of the row filters of the Visualization editor, in the order they are
+                drawn. Each id names the widgets of one filter (its column and its values).
+                Cleared when the dataset changes, like those widgets.
 
 The active dataset changes on a new read (``set_dataset``), when the user picks one kept in
 memory (``switch_dataset``) or removes it (``clear_dataset``).
@@ -58,6 +61,7 @@ _SKIPPED = "skipped_columns"
 _WIDGET_PREFS = "widget_prefs"
 _CHART_UPLOADS = "chart_config_uploads"
 _CHART_MESSAGES = "chart_config_messages"
+_CHART_FILTERS = "chart_filters"
 
 _MULTIPART = "multipart"
 _PART = "part"
@@ -104,6 +108,7 @@ def _defaults() -> dict[str, Any]:
         _WIDGET_PREFS: {},
         _CHART_UPLOADS: 0,
         _CHART_MESSAGES: (),
+        _CHART_FILTERS: (),
     }
 
 
@@ -462,6 +467,19 @@ def pop_chart_config_messages() -> tuple[tuple[str, str], ...]:
     return messages
 
 
+# Row filters of Visualization
+
+
+def get_chart_filters() -> tuple[int, ...]:
+    """Ids of the row filters of the chart editor, in the order they are drawn."""
+    return st.session_state[_CHART_FILTERS]
+
+
+def set_chart_filters(ids: Iterable[int]) -> None:
+    """Replace the row filters of the chart editor. Only from a callback, or before drawing."""
+    st.session_state[_CHART_FILTERS] = tuple(ids)
+
+
 def sync_switcher() -> None:
     """Point the sidebar selector at the active dataset. Call it before drawing the selector.
 
@@ -486,6 +504,7 @@ def _reset_dependent_state() -> None:
     """Clear everything derived from the active dataset."""
     st.session_state[_SCHEMA] = None
     st.session_state[_SKIPPED] = ()
+    st.session_state[_CHART_FILTERS] = ()
     st.session_state[_WIDGET_PREFS] = {
         k: v for k, v in _prefs().items() if not k.startswith(WIDGET_PREFIX)
     }

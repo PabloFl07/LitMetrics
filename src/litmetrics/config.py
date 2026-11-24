@@ -153,6 +153,11 @@ class VisualizeConfig:
     cache_max_charts: int = 256
     # Datasets whose usable columns (``column_hints``) the cache keeps.
     cache_max_hints: int = 8
+    # Values listed by a filter on a column of free text or identifiers (the most frequent of a
+    # sample); any other value can still be typed in.
+    filter_values: int = 1_000
+    # Rows sampled to find those values: counting every value of a 3 M row id column is slow.
+    filter_sample: int = 200_000
     # Timings of the chart data and option under its table, for development only: set the
     # environment variable ``LITMETRICS_DEV=1`` before starting the app.
     show_timings: bool = os.environ.get("LITMETRICS_DEV") == "1"

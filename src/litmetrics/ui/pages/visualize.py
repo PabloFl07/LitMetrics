@@ -2,8 +2,9 @@
 columns, the rows and the look; the page never suggests charts.
 
 From top to bottom: "Skip columns" (shared with Profile), the chart kinds the dataset has
-columns for, and the editor (Data and Style tabs, Reset, Save / load) next to the chart, its
-notes and the data behind it.
+columns for, and the editor (Data, Filters and Style tabs, Reset, Save / load) next to the
+chart, its notes and the data behind it. Filters are a list the person adds to, one card each,
+on any column with two values or more, drawn in the chart or not.
 
 How it stays fast (docs/performance.md, section Visualization):
 - Data and look are apart (R-V1): ``core/visualize.py`` aggregates what ``DataSpec`` says,
@@ -76,6 +77,7 @@ _STYLE_WIDGETS: dict[str, _StyleWidget] = {
     "title": _StyleWidget("viz_title", _ALL),
     "palette_name": _StyleWidget("viz_palette", _ALL),
     "color": _StyleWidget("viz_color", _ALL - {_K.PIE, _K.HEATMAP}),
+    "color_each": _StyleWidget("viz_color_each", frozenset({_K.BOXPLOT})),
     "horizontal": _StyleWidget("viz_horizontal", frozenset({_K.BAR, _K.BOXPLOT})),
     "stack": _StyleWidget("viz_stack", frozenset({_K.BAR, _K.LINE, _K.HISTOGRAM})),
     "sort": _StyleWidget("viz_sort", frozenset({_K.BAR})),
@@ -103,26 +105,28 @@ def _role_key(kind: viz.ChartKind, field: str) -> str:
     return _key(f"{kind}_{field}")
 
 
-def _filter_keys() -> dict[str, str]:
-    """Keys of the filter widgets, shared by every kind: the rows are the same for all."""
-    names = ("date", "dates", "cat", "values", "num", "range")
-    return {name: _key(f"filter_{name}") for name in names}
+def _filter_keys(filter_id: int) -> tuple[str, str]:
+    """Keys of the column and of the values of filter ``filter_id``. Filters are shared by
+    every kind: the rows are the same for all.
+    """
+    return _key(f"filter_{filter_id}_column"), _key(f"filter_{filter_id}_value")
 
 
 def _kind_keys(kind: viz.ChartKind) -> list[str]:
-    """Keys of every widget drawn for ``kind``: its columns and data options, the filters, and
-    the style widgets it draws (also those other kinds share).
+    """Keys of every widget drawn for ``kind``: its columns and data options, and the style
+    widgets it draws (also those other kinds share). Filters are not here (``_drop_filters``).
     """
     data = [_role_key(kind, role.field) for role in viz.ROLES[kind]]
     data += [_role_key(kind, "agg"), *(_key(f"{kind}_{n}") for n in ("bins", "unit", "top_k"))]
-    data += [_key(f"{kind}_trim"), *_filter_keys().values()]
+    data += [_key(f"{kind}_trim")]
     looks = [w.key for w in _STYLE_WIDGETS.values() if kind in w.kinds]
     return data + looks
 
 
 def _reset(kind: viz.ChartKind) -> None:
-    """Callback of "Reset": the options of ``kind`` back to where the page starts."""
+    """Callback of "Reset": the options of ``kind`` back to where the page starts, no filter."""
     state.forget_widgets(_kind_keys(kind))
+    _drop_filters()
 
 
 # Page
@@ -165,9 +169,13 @@ def _workspace() -> None:
         # Filled once the spec and the style are known, but drawn above the tabs.
         actions = st.container(horizontal=True, vertical_alignment="center")
         notices = st.container()
-        data_tab, style_tab = st.tabs([":material/dataset: Data", ":material/palette: Style"])
+        data_tab, filter_tab, style_tab = st.tabs(
+            [":material/dataset: Data", ":material/filter_alt: Filters", ":material/palette: Style"]
+        )
         with data_tab:
             spec = _data_controls(kind, hints, skipped)
+        with filter_tab:
+            spec = replace(spec, filters=_filters(hints))
         with style_tab:
             chart_style = _style_controls(spec, hints)
         with actions:
@@ -229,7 +237,7 @@ def _free_column(
 def _data_controls(
     kind: viz.ChartKind, hints: viz.ColumnHints, skipped: tuple[str, ...]
 ) -> viz.DataSpec:
-    """Columns of each role of ``kind``, the options that change the data, and the filters.
+    """Columns of each role of ``kind`` and the options that change the data (no filters).
 
     ``skipped`` are the columns of "Skip columns": not in ``hints``, only listed at the end.
     """
@@ -322,7 +330,6 @@ def _data_controls(
             help="Leave out a few extreme values (placeholder dates, typos) that squash the chart.",
         )
         spec = replace(spec, trim=trim)
-    spec = replace(spec, filters=_filters(hints))
     left_out = [*hints.left_out, *((name, "skipped") for name in skipped)]
     if left_out:
         names = ", ".join(f"{text.md(name)} ({why})" for name, why in left_out)
@@ -334,37 +341,104 @@ def _data_controls(
 
 
 def _filters(hints: viz.ColumnHints) -> tuple[viz.RowFilter, ...]:
-    """Rows the chart uses: a date range, values of a category and a range of a number.
+    """Rows the chart uses: those that pass every filter of the list, one card each.
 
-    They go in ``DataSpec`` and so in the cache key; the masks are built inside
-    ``chart_data`` (R-V8). A filter left at its full range is no filter, so it does not split
-    the cache.
+    Any column with two values or more can filter, also one the chart does not draw (an id,
+    free text, a row number): ``hints.filters``. They go in ``DataSpec`` and so in the cache
+    key; the masks are built inside ``chart_data`` (R-V8). A filter without a column, or left
+    at its full range, is no filter, so it does not split the cache.
     """
-    keys = _filter_keys()
+    ids = state.get_chart_filters()
+    if not ids:
+        st.caption(
+            "Every row is drawn. Add a filter to keep only some rows: by any column, "
+            "also one the chart does not show."
+        )
     found: list[viz.RowFilter] = []
-    with st.expander("Filter rows", icon=":material/filter_alt:"):
-        if hints.datetime:
-            found += _date_filter(hints, keys["date"], keys["dates"])
-        if hints.categorical:
-            found += _values_filter(hints, keys["cat"], keys["values"])
-        if hints.numeric:
-            found += _range_filter(hints, keys["num"], keys["range"])
+    for filter_id in ids:
+        found += _filter_card(filter_id, hints)
+    with st.container(horizontal=True):
+        st.button(
+            "Add filter",
+            icon=":material/add:",
+            key="viz_filter_add",
+            on_click=_add_filter,
+            disabled=not hints.filters,
+        )
+        if len(ids) > 1:
+            st.button(
+                "Remove all",
+                icon=":material/delete_sweep:",
+                key="viz_filter_clear",
+                on_click=_drop_filters,
+                type="tertiary",
+            )
     return tuple(found)
 
 
-def _filter_column(label: str, columns: tuple[str, ...], key: str, bound_key: str) -> str | None:
-    """Selector of the column a filter applies to (None: no filter). Changing it drops the
+def _add_filter() -> None:
+    """Callback of "Add filter": a new card, without a column yet."""
+    ids = state.get_chart_filters()
+    new = max(ids, default=-1) + 1
+    state.forget_widgets(_filter_keys(new))
+    state.set_chart_filters((*ids, new))
+
+
+def _remove_filter(filter_id: int) -> None:
+    """Callback of the close button of a card: the filter and its widgets are gone."""
+    state.forget_widgets(_filter_keys(filter_id))
+    state.set_chart_filters(i for i in state.get_chart_filters() if i != filter_id)
+
+
+def _drop_filters() -> None:
+    """Every filter and its widgets are gone. From a callback."""
+    for filter_id in state.get_chart_filters():
+        state.forget_widgets(_filter_keys(filter_id))
+    state.set_chart_filters(())
+
+
+def _filter_card(filter_id: int, hints: viz.ColumnHints) -> list[viz.RowFilter]:
+    """One filter in a card of its own: its column, a button to remove it and, once a column
+    is picked, the control of its type (dates, values or range).
+    """
+    column_key, value_key = _filter_keys(filter_id)
+    with st.container(border=True, key=f"viz_filter_{filter_id}"):
+        with st.container(horizontal=True, vertical_alignment="bottom"):
+            column = _filter_column(hints.filter_columns, column_key, value_key)
+            st.button(
+                "",
+                icon=":material/close:",
+                key=f"viz_filter_remove_{filter_id}",
+                help="Remove this filter",
+                on_click=_remove_filter,
+                args=(filter_id,),
+                type="tertiary",
+            )
+        if column is None:
+            return []
+        match hints.filter_type(column):
+            case "dates":
+                return _date_filter(hints, column, value_key)
+            case "values":
+                return _values_filter(hints, column, value_key)
+            case "range":
+                return _range_filter(hints, column, value_key)
+    return []
+
+
+def _filter_column(columns: tuple[str, ...], key: str, bound_key: str) -> str | None:
+    """Selector of the column a filter applies to (None: no filter yet). Changing it drops the
     values picked for the previous column (``bound_key``).
     """
     state.restore_widget(key)
     if state.get_widget(key) not in (None, *columns):
         state.set_widget(key, None)
     column = st.selectbox(
-        label,
+        "Column",
         [None, *columns],
         key=key,
-        format_func=lambda v: "No filter" if v is None else str(v),
-        placeholder="No filter",
+        format_func=lambda v: "Pick a column" if v is None else str(v),
+        placeholder="Pick a column",
         on_change=state.forget_widgets,
         args=([bound_key],),
     )
@@ -372,10 +446,7 @@ def _filter_column(label: str, columns: tuple[str, ...], key: str, bound_key: st
     return column
 
 
-def _date_filter(hints: viz.ColumnHints, column_key: str, range_key: str) -> list[viz.RowFilter]:
-    column = _filter_column("Dates of", hints.datetime, column_key, range_key)
-    if column is None:
-        return []
+def _date_filter(hints: viz.ColumnHints, column: str, range_key: str) -> list[viz.RowFilter]:
     first, last = hints.dates_of(column)
     picked = state.kept_widget(
         st.date_input,
@@ -399,29 +470,33 @@ def _date_filter(hints: viz.ColumnHints, column_key: str, range_key: str) -> lis
     ]
 
 
-def _values_filter(hints: viz.ColumnHints, column_key: str, values_key: str) -> list[viz.RowFilter]:
-    column = _filter_column("Values of", hints.categorical, column_key, values_key)
-    if column is None:
-        return []
+def _values_filter(hints: viz.ColumnHints, column: str, values_key: str) -> list[viz.RowFilter]:
     options = hints.values_of(column)
-    # Values remembered for this column that it no longer has would make the widget raise.
+    # Free text and ids only list their most frequent values: others can be typed in.
+    partial = column in hints.partial
     state.restore_widget(values_key)
-    if state.has_widget(values_key):
+    if state.has_widget(values_key) and not partial:
+        # Values remembered for this column that it no longer has would make the widget raise.
         state.set_widget(values_key, [v for v in state.get_widget(values_key) if v in options])
     values = state.kept_widget(
-        st.multiselect, "Keep only", options, key=values_key, placeholder="Every value"
+        st.multiselect,
+        "Keep only",
+        options,
+        key=values_key,
+        placeholder="Pick or type values" if partial else "Every value",
+        accept_new_options=partial,
+        help=f"Lists the {len(options):,} most frequent values; type any other one."
+        if partial
+        else None,
     )
     # None or every value picked is no filter (as a full range): rows are not left out
     # and the cache is not split.
-    if not values or set(values) == set(options):
+    if not values or (not partial and set(values) == set(options)):
         return []
-    return [viz.ValuesFilter(column, tuple(values))]
+    return [viz.ValuesFilter(column, tuple(str(v) for v in values))]
 
 
-def _range_filter(hints: viz.ColumnHints, column_key: str, range_key: str) -> list[viz.RowFilter]:
-    column = _filter_column("Range of", hints.numeric, column_key, range_key)
-    if column is None:
-        return []
+def _range_filter(hints: viz.ColumnHints, column: str, range_key: str) -> list[viz.RowFilter]:
     low, high = hints.range_of(column)
     picked_low, picked_high = state.kept_widget(
         st.slider, "Between", low, high, key=range_key, default=(low, high)
@@ -475,13 +550,22 @@ def _style_controls(spec: viz.DataSpec, hints: viz.ColumnHints) -> look.StyleSpe
         args=([keys["color"]],),
     )
     palette = named[palette_name]
+    options: dict[str, Any] = {}
+    # A boxplot is one series: its boxes share a color unless each takes one of the palette.
+    if _draws("color_each", kind) and spec.x is not None:
+        options["color_each"] = state.kept_widget(
+            st.toggle,
+            "One color per box",
+            key=keys["color_each"],
+            default=_STYLE_DEFAULTS.color_each,
+            help="Each box takes the next color of the palette.",
+        )
     color = None
-    if _draws("color", kind) and one_series:
+    if _draws("color", kind) and one_series and not options.get("color_each"):
         picked = state.kept_widget(st.color_picker, "Color", key=keys["color"], default=palette[0])
         if picked != palette[0]:
             color = picked
             palette = (picked, *palette[1:])
-    options: dict[str, Any] = {}
 
     def toggle(field: str, label: str, *, when: bool = True, help: str | None = None) -> None:
         if _draws(field, kind) and when:
@@ -636,32 +720,31 @@ def _apply_config(spec: viz.DataSpec, chart_style: look.StyleSpec, hints: viz.Co
 
 
 def _apply_filters(filters: Iterable[viz.RowFilter], hints: viz.ColumnHints) -> None:
-    """Set the filter widgets from ``filters``: the first one of each type (the editor has one
-    of each), clamped to what the column holds.
+    """Replace the filter cards with one per filter of ``filters``, clamped to what the column
+    holds (``fit_to_dataset`` already left out those this dataset cannot use).
     """
-    keys = _filter_keys()
-    done: set[type] = set()
-    for f in filters:
-        if type(f) in done:
-            continue
-        done.add(type(f))
+    _drop_filters()
+    ids = []
+    for filter_id, f in enumerate(filters):
+        column_key, value_key = _filter_keys(filter_id)
+        ids.append(filter_id)
+        state.put_widget(column_key, f.column)
         match f:
             case viz.DateFilter(column=column, start=start, end=end):
                 first, last = hints.dates_of(column)
                 begin = max(first, _iso(start, first))
                 finish = min(last, _iso(end, last))
-                state.put_widget(keys["date"], column)
-                state.put_widget(keys["dates"], (min(begin, finish), max(begin, finish)))
+                state.put_widget(value_key, (min(begin, finish), max(begin, finish)))
             case viz.ValuesFilter(column=column, values=values):
                 options = set(hints.values_of(column))
-                state.put_widget(keys["cat"], column)
-                state.put_widget(keys["values"], [v for v in values if v in options])
+                partial = column in hints.partial
+                state.put_widget(value_key, [v for v in values if partial or v in options])
             case viz.RangeFilter(column=column, low=low, high=high):
                 lo, hi = hints.range_of(column)
                 begin = lo if low is None else min(max(low, lo), hi)
                 finish = hi if high is None else min(max(high, lo), hi)
-                state.put_widget(keys["num"], column)
-                state.put_widget(keys["range"], (min(begin, finish), max(begin, finish)))
+                state.put_widget(value_key, (min(begin, finish), max(begin, finish)))
+    state.set_chart_filters(ids)
 
 
 def _iso(day: str | None, default: dt.date) -> dt.date:
