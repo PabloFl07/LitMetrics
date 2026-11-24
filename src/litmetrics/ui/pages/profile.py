@@ -34,7 +34,7 @@ from litmetrics.core.profile import (
     top_correlated_pairs,
 )
 from litmetrics.core.schema import IDENTIFIER_MIN_DISTINCT, Schema, SemanticType, drop_columns
-from litmetrics.ui import cache, charts, echarts, state, style, tables, text, theme
+from litmetrics.ui import cache, charts, echarts, skip, state, style, tables, text, theme
 
 _CFG = ProfileConfig
 
@@ -149,7 +149,7 @@ def profile_page() -> None:
         st.info("Load a file in the Load page to see its profile.")
         return
 
-    _skip_selector(state.require_schema())
+    skip.skip_selector(state.require_schema())
     # From here on, the dataset without the skipped columns.
     active = _active()
     if not active.schema.columns:
@@ -177,24 +177,6 @@ def profile_page() -> None:
 
 
 # Components
-
-
-def _skip_selector(schema: Schema) -> None:
-    """Columns to leave out of every tab, such as codes stored as numbers."""
-    key = state.widget_key("skipped_columns")
-    st.multiselect(
-        "Skip columns",
-        [c.name for c in schema.columns],
-        key=key,
-        on_change=lambda: state.set_skipped_columns(state.widget_value(key)),
-        # Kept when the user visits another page and comes back.
-        persist_state="session",
-        placeholder="None: every column is profiled",
-        help=(
-            "Columns left out of every tab and of the numbers above. Useful for codes stored "
-            "as numbers (phone numbers, postal codes): statistics on them mean nothing."
-        ),
-    )
 
 
 def _summary(active: _Active) -> None:

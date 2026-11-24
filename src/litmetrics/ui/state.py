@@ -22,13 +22,22 @@ State kept per browser session:
                 Tells which part the active dataset is, even with another version of a file
                 of the same name in memory.
     schema      Semantic types of the active dataset. Cleared when the dataset changes.
-    skipped     Columns the user left out of the profile. Cleared when the dataset changes.
+    skipped     Columns the user left out of Profile and Visualization. Cleared when the
+                dataset changes.
+    widget_prefs  Last value of the remembered widgets (``kept_widget``), by widget key.
+                Streamlit drops the state of a widget that is not drawn in a run; these come
+                back when it is drawn again (the options of a chart kind after drawing another
+                kind, or after visiting another page). Those of ``WIDGET_PREFIX`` widgets are
+                cleared when the dataset changes, like the widgets.
+    chart_uploads  Chart configurations loaded so far in Visualization: part of the key of
+                its uploader, which gets a new key after each load so it empties.
+    chart_messages  What the last chart configuration load said, shown once.
 
 The active dataset changes on a new read (``set_dataset``), when the user picks one kept in
 memory (``switch_dataset``) or removes it (``clear_dataset``).
 """
 
-from collections.abc import Iterable
+from collections.abc import Callable, Iterable
 from typing import Any
 
 import streamlit as st
@@ -46,6 +55,9 @@ _SOURCE_ID = "source_id"
 _READ_ERROR = "read_error"
 _SCHEMA = "schema"
 _SKIPPED = "skipped_columns"
+_WIDGET_PREFS = "widget_prefs"
+_CHART_UPLOADS = "chart_config_uploads"
+_CHART_MESSAGES = "chart_config_messages"
 
 _MULTIPART = "multipart"
 _PART = "part"
@@ -89,6 +101,9 @@ def _defaults() -> dict[str, Any]:
         _PART_IDS: {},
         _SCHEMA: None,
         _SKIPPED: (),
+        _WIDGET_PREFS: {},
+        _CHART_UPLOADS: 0,
+        _CHART_MESSAGES: (),
     }
 
 
@@ -321,11 +336,11 @@ def set_schema(schema: Schema) -> None:
     st.session_state[_SCHEMA] = schema
 
 
-# Columns left out of the profile
+# Columns left out of Profile and Visualization
 
 
 def get_skipped_columns() -> tuple[str, ...]:
-    """Columns the user chose not to profile (phone numbers, codes...), in dataset order."""
+    """Columns the user chose to skip (phone numbers, codes...), in dataset order."""
     return st.session_state[_SKIPPED]
 
 
@@ -347,6 +362,104 @@ def widget_key(name: str) -> str:
 def widget_value(key: str) -> Any:
     """Current value of widget ``key``, for its ``on_change`` callback."""
     return st.session_state[key]
+
+
+def has_widget(key: str) -> bool:
+    """Whether widget ``key`` has a value in this run."""
+    return key in st.session_state
+
+
+def get_widget(key: str) -> Any:
+    """Value of widget ``key``, or None if it has none."""
+    return st.session_state.get(key)
+
+
+def set_widget(key: str, value: Any) -> None:
+    """Change widget ``key``. Only from a callback, or before the widget is drawn in this run."""
+    st.session_state[key] = value
+
+
+# Remembered widgets: their value survives runs where they are not drawn
+
+
+def _prefs() -> dict[str, Any]:
+    return st.session_state[_WIDGET_PREFS]
+
+
+def restore_widget(key: str, default: Any = None) -> None:
+    """Before drawing widget ``key``: give it its remembered value if Streamlit dropped it,
+    else ``default`` the first time (None: leave it to the widget).
+    """
+    if key in st.session_state:
+        return
+    prefs = _prefs()
+    if key in prefs:
+        st.session_state[key] = prefs[key]
+    elif default is not None:
+        st.session_state[key] = default
+
+
+def remember_widget(key: str, value: Any) -> None:
+    """Keep the value widget ``key`` was drawn with, for when it is drawn again."""
+    _prefs()[key] = value
+
+
+def put_widget(key: str, value: Any) -> None:
+    """Give widget ``key`` the value ``value`` now and when it is drawn again. Only from a
+    callback, or before the widget is drawn.
+    """
+    st.session_state[key] = value
+    _prefs()[key] = value
+
+
+def forget_widgets(keys: Iterable[str]) -> None:
+    """Drop widgets ``keys`` and their remembered values: drawn again, they take their
+    defaults. Only from a callback (or for widgets not drawn yet in this run).
+    """
+    prefs = _prefs()
+    for key in keys:
+        st.session_state.pop(key, None)
+        prefs.pop(key, None)
+
+
+def kept_widget[T](
+    draw: Callable[..., T], label: str, *args: Any, key: str, default: Any = None, **kwargs: Any
+) -> T:
+    """``draw(label, *args, key=key, **kwargs)`` with the value it had the last time it was
+    drawn, or ``default`` the first time.
+
+    Never pass the default to the widget itself (``value=``, ``default=``): with a value
+    already in its state Streamlit warns.
+    """
+    restore_widget(key, default)
+    value = draw(label, *args, key=key, **kwargs)
+    remember_widget(key, value)
+    return value
+
+
+# Chart configurations loaded in Visualization
+
+
+def chart_config_uploads() -> int:
+    """Chart configurations loaded so far: part of the key of the uploader."""
+    return st.session_state[_CHART_UPLOADS]
+
+
+def count_chart_config_upload() -> None:
+    """One more configuration loaded: the uploader gets a new key, and so empties."""
+    st.session_state[_CHART_UPLOADS] += 1
+
+
+def set_chart_config_messages(messages: Iterable[tuple[str, str]]) -> None:
+    """What the last configuration load said, as ``(level, text)``: error, warning, success."""
+    st.session_state[_CHART_MESSAGES] = tuple(messages)
+
+
+def pop_chart_config_messages() -> tuple[tuple[str, str], ...]:
+    """The messages of the last configuration load, once: they are cleared."""
+    messages = st.session_state[_CHART_MESSAGES]
+    st.session_state[_CHART_MESSAGES] = ()
+    return messages
 
 
 def sync_switcher() -> None:
@@ -373,6 +486,9 @@ def _reset_dependent_state() -> None:
     """Clear everything derived from the active dataset."""
     st.session_state[_SCHEMA] = None
     st.session_state[_SKIPPED] = ()
+    st.session_state[_WIDGET_PREFS] = {
+        k: v for k, v in _prefs().items() if not k.startswith(WIDGET_PREFIX)
+    }
     # list(): the keys cannot be deleted while iterating over them.
     for key in list(st.session_state.keys()):
         if isinstance(key, str) and key.startswith(WIDGET_PREFIX):

@@ -21,7 +21,9 @@ the correlation of some columns) do not depend on the other columns, so they tak
 whole dataset with the whole DataFrame, and the columns to describe as ``names``. Leaving
 columns out of the profile then reuses them instead of computing them again. Only what depends
 on the set of columns (``base_profile``: duplicate rows; ``rows_with_missing``) takes the id of
-the view (``view_id``) with the DataFrame without those columns.
+the view (``view_id``) with the DataFrame without those columns. The same holds for
+Visualization: ``column_hints`` (columns offered) takes the view, ``chart_data`` the whole
+dataset.
 """
 
 import hashlib
@@ -31,8 +33,8 @@ from datetime import datetime
 import pandas as pd
 import streamlit as st
 
-from litmetrics.config import LoadConfig, ProfileConfig
-from litmetrics.core import columns, profile
+from litmetrics.config import LoadConfig, ProfileConfig, VisualizeConfig
+from litmetrics.core import columns, profile, visualize
 from litmetrics.core.io import formats
 from litmetrics.core.io.base import LoadedDataset, Source
 from litmetrics.core.io.library import DatasetLibrary, LibraryEntry
@@ -252,3 +254,28 @@ def inspect_column(
         outlier_limit=ProfileConfig.max_outlier_dots,
         n_examples=ProfileConfig.text_examples,
     )
+
+
+# Visualization
+
+
+@st.cache_data(max_entries=VisualizeConfig.cache_max_hints, show_spinner=False)
+def column_hints(dataset_id: str, _df: pd.DataFrame, schema: Schema) -> visualize.ColumnHints:
+    """Columns of ``_df`` that can go in a chart, and what the filters need, once per dataset.
+
+    Depends on the set of columns offered: pass ``view_id(dataset_id, skipped)`` with the
+    DataFrame and schema without the skipped columns.
+    """
+    return visualize.column_hints(_df, schema)
+
+
+@st.cache_data(max_entries=VisualizeConfig.cache_max_charts, show_spinner="Preparing the chart…")
+def chart_data(dataset_id: str, _df: pd.DataFrame, spec: visualize.DataSpec) -> visualize.ChartData:
+    """Aggregated data of one chart, keyed by what changes the data only, filters included
+    (R-V1, R-V3, R-V8). A chart only reads its own columns, so it takes the id of the whole
+    dataset: skipping columns does not throw its entries away.
+
+    Raises:
+        ValueError: ``spec`` does not fit the dataset (``visualize.chart_data``). Not cached.
+    """
+    return visualize.chart_data(_df, spec)

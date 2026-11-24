@@ -111,3 +111,48 @@ class ProfileConfig:
     # Height (px) of a row of the column tables. Set on the table, so it does not depend on the
     # font size of the style variant.
     table_row_height: int = 33
+
+
+@dataclass(frozen=True)
+class VisualizeConfig:
+    """Settings of the Visualization page: limits of what reaches the browser (R-V2) and of
+    the heuristics that pick the first chart of each kind (``core/visualize.py``).
+    """
+
+    # Points of a scatter chart: a random sample with a fixed seed above this.
+    max_points: int = 10_000
+    # Points of each line of a time series. A finer time unit is coarsened to fit.
+    max_line_points: int = 2_000
+    # Buckets the automatic time unit aims for at most, so the line stays readable.
+    auto_line_points: int = 400
+    # Categories of a bar axis; the rest are grouped in "Other".
+    max_categories: int = 50
+    # Categories the person can ask to show on an axis (bars, boxes, heatmap rows and columns).
+    max_shown_categories: int = 30
+    # Slices of a pie.
+    max_slices: int = 12
+    # Series drawn when a chart is split by a column (one color each).
+    max_series: int = 8
+    # Outliers drawn in a boxplot, over all its boxes.
+    max_outliers: int = 300
+    # Values sampled for the quantiles of a boxplot and for the trimming of extreme values.
+    quantile_sample: int = 200_000
+    # Rows sampled to rank numeric pairs by correlation (default axes of a scatter).
+    correlation_sample: int = 50_000
+    # Numeric columns compared to find that pair: the first ones, the matrix grows as n².
+    pair_columns: int = 20
+    # Intervals a numeric x axis of a bar or line chart is cut into at first.
+    x_bins: int = 10
+    # Bars of a histogram at first.
+    histogram_bins: int = 30
+    # Extreme values are trimmed when the whole range is this many times the central one...
+    trim_ratio: float = 10.0
+    # ...and the central range goes from this quantile to 1 minus it.
+    trim_quantile: float = 0.005
+    # Chart data kept by the cache: many combinations of options, each one small (R-V3).
+    cache_max_charts: int = 256
+    # Datasets whose usable columns (``column_hints``) the cache keeps.
+    cache_max_hints: int = 8
+    # Timings of the chart data and option under its table, for development only: set the
+    # environment variable ``LITMETRICS_DEV=1`` before starting the app.
+    show_timings: bool = os.environ.get("LITMETRICS_DEV") == "1"

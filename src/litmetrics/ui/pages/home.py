@@ -66,8 +66,8 @@ _STEPS = (
     _Step(
         "Visualization",
         "bar_chart",
-        "Plot the columns with interactive charts and pick points to inspect rows.",
-        "Coming soon",
+        "Build a chart: pick its kind, columns, rows and look, and save it as JSON.",
+        "Ready",
         "visualize",
         needs_dataset=True,
     ),
@@ -131,8 +131,9 @@ def _active(dataset: LoadedDataset, pages: dict[str, st.Page]) -> None:
             (fmt, "Format", dataset.format, "description"),
         ):
             where.metric(label, value, icon=f":material/{icon}:", border=True)
-        profile, load = st.columns(2)
+        profile, chart, load = st.columns(3)
         profile.page_link(pages["profile"], label="Profile it", icon=":material/query_stats:")
+        chart.page_link(pages["visualize"], label="Chart it", icon=":material/bar_chart:")
         load.page_link(pages["load"], label="Load another file", icon=":material/upload_file:")
 
 
