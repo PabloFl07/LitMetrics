@@ -360,3 +360,46 @@ CHART_COLORS = ChartColors(
         "#DC2626",
     ),
 )
+
+
+# ---------------------------------------------------------------------------------------------
+# Visualization
+
+
+def chart_frame(n: int = 3_000) -> pd.DataFrame:
+    """``n`` rows, untyped (as read from a CSV), with what the chart builder must tell apart.
+
+    - ``a`` and ``b``: two correlated numbers (the best scatter pair); ``a`` misses every 17th.
+    - ``plan`` (3 values) and ``churn`` (2): categories; ``city`` has 60 values, which the
+      schema reads as free text and the page must not offer.
+    - ``date``: dates as text every 6 hours, with one placeholder ``9999-12-31`` written in the
+      same format (so it is read as a date) that would squash a time axis.
+    - ``empty``: all missing; ``row``: 1..n without "id" in its name (a row number, not a
+      measure); ``id``: 0..n-1 (an identifier for the schema).
+    - ``income``: integers almost all distinct over a wide range: a measure, not a row number.
+    """
+    rng = np.random.default_rng(1)
+    a = rng.normal(50, 10, n)
+    dates = pd.date_range("2020-01-01", periods=n, freq="6h").astype(str).to_numpy()
+    dates[0] = "9999-12-31 00:00:00"
+    df = pd.DataFrame(
+        {
+            "id": np.arange(n),
+            "a": a,
+            "b": a * 2 + rng.normal(0, 5, n),
+            "plan": rng.choice(["basic", "standard", "premium"], n),
+            "churn": rng.choice(["yes", "no"], n),
+            "city": [f"city {i}" for i in rng.integers(0, 60, n)],
+            "date": dates,
+            "empty": np.full(n, np.nan),
+            "row": np.arange(1, n + 1),
+            "income": rng.integers(10_000, 90_000, n),
+        }
+    )
+    df.loc[::17, "a"] = np.nan
+    return df
+
+
+def chart_csv() -> bytes:
+    """``chart_frame`` as the CSV file a user uploads."""
+    return chart_frame().to_csv(index=False).encode()

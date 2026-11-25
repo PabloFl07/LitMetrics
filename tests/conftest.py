@@ -14,7 +14,9 @@ import pandas as pd
 import pytest
 from fixtures import samples
 
-from litmetrics.core.schema import Schema
+from litmetrics.core import visualize
+from litmetrics.core.io.base import LoadedDataset
+from litmetrics.core.schema import Schema, prepare_dataset
 
 _LEVELS = {"integration": pytest.mark.integration, "acceptance": pytest.mark.acceptance}
 _TESTS = Path(__file__).parent
@@ -44,3 +46,10 @@ def typed_df() -> pd.DataFrame:
 def typed_schema() -> Schema:
     """``samples.typed_schema``: the semantic types of ``typed_df``."""
     return samples.typed_schema()
+
+
+@pytest.fixture
+def chart_dataset() -> tuple[pd.DataFrame, visualize.ColumnHints]:
+    """``samples.chart_frame`` typed as the Load page does it, and its ``column_hints``."""
+    dataset, schema = prepare_dataset(LoadedDataset(samples.chart_frame(), "chart.csv", "CSV"))
+    return dataset.df, visualize.column_hints(dataset.df, schema)

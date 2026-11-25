@@ -117,6 +117,32 @@ def run_profile(
     page.profile_page()
 
 
+def run_visualize() -> None:
+    """Draw the Visualization page on ``samples.chart_frame``, typed as the Load page does it.
+
+    ``session_state["other_dataset"] = True`` makes the next run load another dataset (the
+    first 500 rows), as if the user had loaded a new file.
+    """
+    import importlib
+
+    import streamlit as st
+
+    from fixtures.samples import chart_frame
+    from litmetrics.core.io.base import LoadedDataset
+    from litmetrics.core.schema import prepare_dataset
+    from litmetrics.ui import state
+
+    state.init_state()
+    other = st.session_state.get("other_dataset", False)
+    dataset_id = "chart-other" if other else "chart"
+    if state.get_dataset_id() != dataset_id:
+        frame = chart_frame(500) if other else chart_frame()
+        dataset, schema = prepare_dataset(LoadedDataset(frame, "chart.csv", "CSV"))
+        state.set_dataset(dataset, dataset_id, dataset_id)
+        state.set_schema(schema)
+    importlib.import_module("litmetrics.ui.pages.visualize").visualize_page()
+
+
 # ---------------------------------------------------------------------------------------------
 # Helpers to read what a script drew
 

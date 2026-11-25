@@ -251,3 +251,33 @@ def test_analyst_downloads_the_report_of_values_lost_in_an_export(app: Page, tmp
         "30,date,someday,date",
         "30,price,abc,number",
     ]
+
+
+def test_analyst_builds_a_chart_in_visualization(app: Page, tmp_path):
+    """A loaded dataset can be charted in Visualization, and the chart kind changed.
+
+    Given a loaded CSV with numbers, categories and dates,
+    When the user opens Visualization and switches from the first chart to a scatter,
+    Then a chart is drawn each time and the page shows no error.
+
+    Case: the page is not registered or breaks on a real upload, or an option of the chart
+    builder is valid Python but not valid ECharts (AppTest cannot see that, a browser can).
+    Affects: app.py (build_pages), ui/pages/visualize.py, ui/chart_style.py, ui/cache.py,
+    core/visualize.py, ui/echarts.py, streamlit-echarts
+    How: uploads ``chart_csv``, opens Visualization, waits for the canvas of the chart (key
+    ``viz_chart``), clicks the "Scatter" pill and waits for it again.
+    """
+    page = app
+    go_to(page, "Load")
+    upload(page, _file(tmp_path, "chart.csv", samples.chart_csv()))
+    go_to(page, "Visualization")
+    expect_no_exception(page)
+    chart = page.locator(".st-key-viz_chart canvas").first
+    expect(chart).to_be_visible(timeout=RUN_TIMEOUT * 1000)
+    page.get_by_text("Scatter", exact=True).click()
+    wait_idle(page)
+    expect_no_exception(page)
+    expect(page.get_by_text("Y axis", exact=True)).to_be_visible()
+    expect(chart).to_be_visible(timeout=RUN_TIMEOUT * 1000)
+    box = chart.bounding_box()
+    assert box is not None and box["height"] >= 300, box
