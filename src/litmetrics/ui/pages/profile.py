@@ -18,6 +18,8 @@ How it stays fast on large datasets (docs/performance.md):
 """
 
 import dataclasses
+import importlib.metadata
+from datetime import datetime
 from typing import Any
 
 import pandas as pd
@@ -25,16 +27,21 @@ import streamlit as st
 
 from litmetrics.config import ProfileConfig
 from litmetrics.core import columns as cols
+from litmetrics.core import report
 from litmetrics.core.io.base import LoadedDataset
 from litmetrics.core.profile import (
+    BaseProfile,
     CorrelationMethod,
+    CorrelationResult,
+    Issue,
     IssueKind,
     detect_issues,
     missing_by_column,
     top_correlated_pairs,
 )
+from litmetrics.core.sampling import SAMPLE_SEED
 from litmetrics.core.schema import IDENTIFIER_MIN_DISTINCT, Schema, SemanticType, drop_columns
-from litmetrics.ui import cache, charts, echarts, skip, state, style, tables, text, theme
+from litmetrics.ui import cache, charts, echarts, reading, skip, state, style, tables, text, theme
 
 _CFG = ProfileConfig
 
@@ -218,15 +225,17 @@ def _issues() -> None:
         _CFG.max_heatmap_columns,
         _CFG.sample_rows,
     )
+    # Duplicate rows depend on the columns left: the base pass of the view.
+    base = cache.base_profile(active.view_id, active.view.df)
     issues = detect_issues(
-        # Duplicate rows depend on the columns left: the base pass of the view.
-        cache.base_profile(active.view_id, active.view.df),
+        base,
         schema,
         # Every pair, not only the top ones: none above the threshold may be left out.
         top_correlated_pairs(corr.matrix),
         high_missing_pct=_CFG.high_missing_pct,
         high_correlation=_CFG.high_correlation,
     )
+    _report_button(active, base, issues, corr)
     if not issues:
         st.success("No issues found.")
     else:
@@ -253,6 +262,53 @@ def _issues() -> None:
                     line = f"{where} — {issue.message}" if where else issue.message
                     st.markdown(f"{_badge(kind)} {line}")
     _about(_issues_help())
+
+
+def _report_button(
+    active: _Active, base: BaseProfile, issues: list[Issue], corr: CorrelationResult
+) -> None:
+    """Download of the issues as a Markdown report, with why each one matters and what to do.
+
+    The report is written only on click, in another thread (no rerun), from results already
+    computed: every value it needs is taken here, none is read from the session there.
+    """
+    view, skipped = active.view, state.get_skipped_columns()
+    part = reading.active_part()
+    settings = report.ReportSettings(
+        high_missing_pct=_CFG.high_missing_pct,
+        high_correlation=_CFG.high_correlation,
+        correlation_method="pearson",
+        sample_rows=corr.rows_used if corr.rows_used < view.n_rows else None,
+        seed=SAMPLE_SEED,
+        correlation_columns=len(corr.matrix),
+        numeric_columns=corr.numeric_columns,
+    )
+
+    def write() -> str:
+        return report.issues_report(
+            view,
+            base,
+            active.schema,
+            issues,
+            settings,
+            memory=text.format_bytes(base.memory_bytes),
+            generated_at=datetime.now(),
+            version=importlib.metadata.version("litmetrics"),
+            part=part,
+            skipped=skipped,
+        )
+
+    st.download_button(
+        "Download report",
+        data=write,
+        file_name=report.report_file_name(view.name, part),
+        mime=report.MIME,
+        # Downloading changes nothing in the app: no rerun.
+        on_click="ignore",
+        icon=":material/download:",
+        help="The issues as a Markdown file, with why each one matters and what to do about "
+        "it, and a summary of the dataset and its columns.",
+    )
 
 
 # Columns

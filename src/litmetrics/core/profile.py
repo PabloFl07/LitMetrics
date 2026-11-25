@@ -84,6 +84,76 @@ class IssueKind(StrEnum):
     HIGH_CORRELATION = "high_correlation"
 
 
+type Severity = Literal["high", "medium", "low"]
+
+# Severities from the most to the least serious: the order of the issues in a report.
+SEVERITIES: tuple[Severity, ...] = ("high", "medium", "low")
+
+
+@dataclass(frozen=True)
+class IssueInfo:
+    """What one kind of issue means, in the same words wherever issues are described
+    (the report of the Profile page, and any other export of the issues).
+
+    Attributes:
+        title: Name of the kind ("Many missing values").
+        severity: How much it can distort an analysis.
+        why: Why it matters, for any issue of the kind (a report writes it once per kind).
+        action: What to do about it, also for any issue of the kind.
+    """
+
+    title: str
+    severity: Severity
+    why: str
+    action: str
+
+
+ISSUE_INFO: dict[IssueKind, IssueInfo] = {
+    IssueKind.HIGH_MISSING: IssueInfo(
+        "Many missing values",
+        "high",
+        "A column where most values are missing only describes the rows that have one, which "
+        "are often not a random part of the data: its statistics may not hold for the whole "
+        "dataset, and most models cannot use the column as it is.",
+        "Find out why the values are missing. If the column is needed, keep whether each row "
+        "has a value (it is often informative) or fill the gaps with care; otherwise drop it.",
+    ),
+    IssueKind.DUPLICATE_ROWS: IssueInfo(
+        "Duplicate rows",
+        "medium",
+        "Exact copies weigh twice in counts, averages and models. When the data is split to "
+        "train and test a model, copies can end up on both sides and make it look better "
+        "than it is.",
+        "Check whether they come from a loading or join error. Unless they are real repeated "
+        "events, remove the copies before any analysis or split.",
+    ),
+    IssueKind.CONSTANT: IssueInfo(
+        "Constant column",
+        "low",
+        "A column with a single value cannot tell rows apart, so it adds nothing to "
+        "statistics, charts or a model.",
+        "Drop it, after checking it is not constant only because the file is a filtered or "
+        "partial extract.",
+    ),
+    IssueKind.POSSIBLE_ID: IssueInfo(
+        "Possible identifier",
+        "low",
+        "Keys such as user, order or row ids are (almost) unique per row: useful to join "
+        "tables or trace a record, but statistics on them mean nothing, and a model would "
+        "learn noise from them.",
+        "Keep them to join or trace rows, and leave them out of analysis and training columns.",
+    ),
+    IssueKind.HIGH_CORRELATION: IssueInfo(
+        "Highly correlated columns",
+        "low",
+        "Two columns that move together probably measure the same thing: the second adds "
+        "little information, and together they make the coefficients of linear models "
+        "unstable.",
+        "Keep the one that is easier to explain or has fewer missing values, or combine them.",
+    ),
+}
+
+
 @dataclass(frozen=True)
 class Issue:
     """A problem found in the dataset. ``message`` is meant for the user."""
@@ -91,6 +161,11 @@ class Issue:
     kind: IssueKind
     columns: tuple[str, ...]
     message: str
+
+    @property
+    def info(self) -> IssueInfo:
+        """Title, severity and advice of the kind of this issue."""
+        return ISSUE_INFO[self.kind]
 
 
 @dataclass(frozen=True, eq=False)
