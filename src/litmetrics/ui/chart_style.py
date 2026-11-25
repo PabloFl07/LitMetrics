@@ -21,6 +21,9 @@ from typing import Any, Literal, get_args
 from litmetrics.core.visualize import ChartData, ChartKind, Series
 from litmetrics.ui.charts import ChartColors, mix, with_alpha
 
+# The only color format ``with_alpha`` and ``mix`` read, and what ``st.color_picker`` returns.
+_HEX_COLOR = re.compile(r"#[0-9a-fA-F]{6}")
+
 type SortOrder = Literal["data", "desc", "asc", "label"]
 type ChartSize = Literal["small", "medium", "large"]
 
@@ -92,8 +95,9 @@ class StyleSpec:
         stack: Series of bars, lines and histograms stacked instead of side by side.
         sort: Order of the bars: as computed (most frequent first, or intervals in order), by
             value, or by label (numeric when every label is a number, natural otherwise).
-        smooth: Curved lines.
         area: Lines filled down to the axis.
+        connect_gaps: Lines go on across intervals or periods without a value, instead of
+            stopping there.
         donut: Pie with a hole.
         symbol_size: Diameter (px) of the scatter points.
         opacity: Opacity of the scatter points.
@@ -112,8 +116,8 @@ class StyleSpec:
     color_each: bool = False
     stack: bool = False
     sort: SortOrder = "data"
-    smooth: bool = False
     area: bool = False
+    connect_gaps: bool = False
     donut: bool = True
     symbol_size: int = 7
     opacity: float = 0.7
@@ -127,6 +131,32 @@ class StyleSpec:
         return HEIGHTS[self.size]
 
 
+_ALL = frozenset(ChartKind)
+# Chart kinds each field of ``StyleSpec`` changes; the page only draws its widget for them, and
+# a saved configuration only carries those of its kind. Fields not listed change every kind.
+# Kinds of one series take a color; scatter points and boxes have no single value to label.
+STYLE_KINDS: dict[str, frozenset[ChartKind]] = {
+    "color": _ALL - {ChartKind.PIE, ChartKind.HEATMAP},
+    "color_each": frozenset({ChartKind.BOXPLOT}),
+    "horizontal": frozenset({ChartKind.BAR, ChartKind.BOXPLOT}),
+    "stack": frozenset({ChartKind.BAR, ChartKind.LINE, ChartKind.HISTOGRAM}),
+    "sort": frozenset({ChartKind.BAR}),
+    "area": frozenset({ChartKind.LINE}),
+    "connect_gaps": frozenset({ChartKind.LINE}),
+    "donut": frozenset({ChartKind.PIE}),
+    "symbol_size": frozenset({ChartKind.SCATTER}),
+    "opacity": frozenset({ChartKind.SCATTER}),
+    "trend": frozenset({ChartKind.SCATTER}),
+    "labels": _ALL - {ChartKind.SCATTER, ChartKind.BOXPLOT},
+    "log_scale": _ALL - {ChartKind.PIE},
+}
+
+
+def applies(field: str, kind: ChartKind) -> bool:
+    """Whether the ``StyleSpec`` field ``field`` changes a chart of ``kind``."""
+    return kind in STYLE_KINDS.get(field, _ALL)
+
+
 # Fields of ``StyleSpec`` that are not saved: ``palette`` is derived from the theme.
 _NOT_SAVED = frozenset({"palette"})
 # Allowed values of the ``Literal`` fields, checked when a configuration is loaded.
@@ -136,15 +166,22 @@ _CHOICES: dict[str, tuple[str, ...]] = {
 }
 
 
-def style_to_dict(style: StyleSpec, *, auto_title: str = "") -> dict[str, Any]:
-    """``style`` as JSON values, without ``palette`` (the page rebuilds it from the theme).
+def style_to_dict(style: StyleSpec, kind: ChartKind, *, auto_title: str = "") -> dict[str, Any]:
+    """``style`` as JSON values: only the fields that change a chart of ``kind``
+    (``STYLE_KINDS``), without ``palette`` (the page rebuilds it from the theme).
 
     Args:
         style: The look to save.
+        kind: Kind of the chart it is saved with. A "trend" or "donut" in the file of a line
+            chart reads as an option the chart has and ignores.
         auto_title: The title the page writes when the person leaves it empty: saved as empty,
             so a loaded chart titles itself after its own columns.
     """
-    out = {f.name: getattr(style, f.name) for f in fields(style) if f.name not in _NOT_SAVED}
+    out = {
+        f.name: getattr(style, f.name)
+        for f in fields(style)
+        if f.name not in _NOT_SAVED and applies(f.name, kind)
+    }
     if out["title"] == auto_title:
         out["title"] = ""
     return out
@@ -166,7 +203,9 @@ def style_from_dict(raw: Mapping[str, Any]) -> StyleSpec:
             continue
         value, default = raw[f.name], getattr(defaults, f.name)
         if f.name == "color":
-            ok = value is None or isinstance(value, str)
+            # Any other text would reach ``with_alpha`` (boxplot) and the color picker, which
+            # only read ``#rrggbb``.
+            ok = value is None or (isinstance(value, str) and bool(_HEX_COLOR.fullmatch(value)))
         elif isinstance(default, bool):
             ok = isinstance(value, bool)
         elif isinstance(default, (int, float)):
@@ -241,11 +280,24 @@ def _shows_legend(data: ChartData, style: StyleSpec) -> bool:
 
 
 def _grid(data: ChartData, style: StyleSpec) -> dict[str, Any]:
-    """Margins that leave room for the title, the legend and the axis names."""
+    """Margins that leave room for the title, the legend and the axis names.
+
+    The margins place the plot; ``outerBounds`` (ECharts 6) then shrinks it only as much as
+    the axis labels and names need to stay inside the chart. ``containLabel`` did not count
+    the axis names, nor the first and last rotated labels of an axis without boundary gap
+    (lines): they were cut at the edges.
+    """
     top = 16 + _AXIS_NAME_TOP_PX + (_TITLE_PX if style.title else 0)
     top += _LEGEND_PX if _shows_legend(data, style) else 0
     bottom = 8 + _AXIS_NAME_BOTTOM_PX
-    return {"top": top, "bottom": bottom, "left": 16, "right": 24, "containLabel": True}
+    return {
+        "top": top,
+        "bottom": bottom,
+        "left": 16,
+        "right": 24,
+        "outerBoundsMode": "auto",
+        "outerBoundsContain": "all",
+    }
 
 
 def _has_trend(data: ChartData, style: StyleSpec) -> bool:
@@ -442,13 +494,12 @@ def _line(data: ChartData, style: StyleSpec, colors: ChartColors) -> dict[str, A
             "type": "line",
             "name": s.name,
             "data": values(s),
-            "smooth": style.smooth,
             "stack": "total" if stacked else None,
             "areaStyle": {"opacity": 0.25} if style.area or stacked else None,
             "showSymbol": points <= 60,
             "symbolSize": 5,
             "sampling": "lttb",
-            "connectNulls": False,
+            "connectNulls": style.connect_gaps,
             "label": _value_label(style.labels and points <= 40, "top", colors),
             "emphasis": {"focus": "series"},
         }

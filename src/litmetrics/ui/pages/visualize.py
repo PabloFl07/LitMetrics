@@ -22,7 +22,7 @@ import json
 import math
 import time
 from collections.abc import Collection, Iterable
-from dataclasses import dataclass, replace
+from dataclasses import replace
 from typing import Any
 
 import pandas as pd
@@ -53,45 +53,34 @@ _LABELS_HELP = {
 # Ends of the "Bins" / "Intervals" slider, and lowest "Categories shown".
 _BINS = (5, 100)
 _MIN_TOP_K = 3
+# Highest "Min rows per interval" (``DataSpec`` takes up to 1,000).
+_MAX_MIN_ROWS = 1_000
 _SORT_LABELS = {"data": "Default", "desc": "Value ↓", "asc": "Value ↑", "label": "A-Z, 1-9"}
 
-_ALL = frozenset(viz.ChartKind)
 _K = viz.ChartKind
+# Aggregations whose values add up, so series of them can be stacked: a stack of means is a
+# sum of means, which no row has.
+_ADDITIVE = frozenset({viz.Agg.COUNT, viz.Agg.SUM})
 
-
-@dataclass(frozen=True)
-class _StyleWidget:
-    """Widget of one ``StyleSpec`` field.
-
-    Attributes:
-        key: Its session key. Not ``state.widget_key``: the look does not depend on the
-            columns, so it stays when another dataset is loaded.
-        kinds: Chart kinds that draw it (``_reset`` clears it for them).
-    """
-
-    key: str
-    kinds: frozenset[viz.ChartKind]
-
-
-# Style widgets by ``StyleSpec`` field. Kinds of one series (no "Split by") take a color.
-_STYLE_WIDGETS: dict[str, _StyleWidget] = {
-    "title": _StyleWidget("viz_title", _ALL),
-    "palette_name": _StyleWidget("viz_palette", _ALL),
-    "color": _StyleWidget("viz_color", _ALL - {_K.PIE, _K.HEATMAP}),
-    "color_each": _StyleWidget("viz_color_each", frozenset({_K.BOXPLOT})),
-    "horizontal": _StyleWidget("viz_horizontal", frozenset({_K.BAR, _K.BOXPLOT})),
-    "stack": _StyleWidget("viz_stack", frozenset({_K.BAR, _K.LINE, _K.HISTOGRAM})),
-    "sort": _StyleWidget("viz_sort", frozenset({_K.BAR})),
-    "smooth": _StyleWidget("viz_smooth", frozenset({_K.LINE})),
-    "area": _StyleWidget("viz_area", frozenset({_K.LINE})),
-    "trend": _StyleWidget("viz_trend", frozenset({_K.SCATTER})),
-    "donut": _StyleWidget("viz_donut", frozenset({_K.PIE})),
-    # Scatter points and boxes have no single value to write: no toggle, rather than one that
-    # does nothing.
-    "labels": _StyleWidget("viz_labels", _ALL - {_K.SCATTER, _K.BOXPLOT}),
-    "log_scale": _StyleWidget("viz_log", _ALL - {_K.PIE}),
-    "legend": _StyleWidget("viz_legend", _ALL),
-    "size": _StyleWidget("viz_size", _ALL),
+# Session key of the widget of each ``StyleSpec`` field. Not ``state.widget_key``: the look does
+# not depend on the columns, so it stays when another dataset is loaded. Which kinds draw each
+# one is ``look.STYLE_KINDS`` (``_reset`` clears it for them).
+_STYLE_KEYS: dict[str, str] = {
+    "title": "viz_title",
+    "palette_name": "viz_palette",
+    "color": "viz_color",
+    "color_each": "viz_color_each",
+    "horizontal": "viz_horizontal",
+    "stack": "viz_stack",
+    "sort": "viz_sort",
+    "area": "viz_area",
+    "connect_gaps": "viz_connect",
+    "trend": "viz_trend",
+    "donut": "viz_donut",
+    "labels": "viz_labels",
+    "log_scale": "viz_log",
+    "legend": "viz_legend",
+    "size": "viz_size",
 }
 _STYLE_DEFAULTS = look.StyleSpec()
 
@@ -135,8 +124,8 @@ def _kind_keys(kind: viz.ChartKind) -> list[str]:
     """
     data = [_role_key(kind, role.field) for role in viz.ROLES[kind]]
     data += [_role_key(kind, "agg"), *(_key(f"{kind}_{n}") for n in ("bins", "unit", "top_k"))]
-    data += [_key(f"{kind}_trim")]
-    looks = [w.key for w in _STYLE_WIDGETS.values() if kind in w.kinds]
+    data += [_key(f"{kind}_trim"), _key(f"{kind}_min_rows")]
+    looks = [key for field, key in _STYLE_KEYS.items() if look.applies(field, kind)]
     return data + looks
 
 
@@ -347,6 +336,19 @@ def _data_controls(
             help="Leave out a few extreme values (placeholder dates, typos) that squash the chart.",
         )
         spec = replace(spec, trim=trim)
+    if kind in (_K.BAR, _K.LINE) and numeric_x and spec.value and spec.agg not in _ADDITIVE:
+        least = state.kept_widget(
+            st.number_input,
+            "Min rows per interval",
+            1,
+            _MAX_MIN_ROWS,
+            key=_key(f"{kind}_min_rows"),
+            default=VisualizeConfig.min_rows_per_point,
+            step=1,
+            help=f"An interval with fewer rows gets no {spec.agg}: from a handful of rows it "
+            "makes spikes and drops that look like a trend. 1 draws every interval.",
+        )
+        spec = replace(spec, min_rows=int(least))
     left_out = [*hints.left_out, *((name, "skipped") for name in skipped)]
     if left_out:
         names = ", ".join(f"{text.md(name)} ({why})" for name, why in left_out)
@@ -614,7 +616,7 @@ def _range_filter(hints: viz.ColumnHints, column: str, value_key: str) -> list[v
 
 def _draws(field: str, kind: viz.ChartKind) -> bool:
     """Whether the style widget of ``field`` is drawn for ``kind``."""
-    return kind in _STYLE_WIDGETS[field].kinds
+    return look.applies(field, kind)
 
 
 def _auto_title(spec: viz.DataSpec, hints: viz.ColumnHints) -> str:
@@ -630,7 +632,7 @@ def _style_controls(spec: viz.DataSpec, hints: viz.ColumnHints) -> look.StyleSpe
     """
     kind = spec.kind
     one_series = spec.group is None
-    keys = {field: w.key for field, w in _STYLE_WIDGETS.items()}
+    keys = _STYLE_KEYS
     auto_title = _auto_title(spec, hints)
     title = state.kept_widget(st.text_input, "Title", key=keys["title"], placeholder=auto_title)
     named = look.palettes(theme.chart_theme().palette, theme.chart_colors())
@@ -672,7 +674,8 @@ def _style_controls(spec: viz.DataSpec, hints: viz.ColumnHints) -> look.StyleSpe
             )
 
     toggle("horizontal", "Horizontal")
-    toggle("stack", "Stack series", when=not one_series)
+    additive = spec.value is None or spec.agg in _ADDITIVE
+    toggle("stack", "Stack series", when=not one_series and additive)
     if _draws("sort", kind):
         options["sort"] = state.kept_widget(
             st.segmented_control,
@@ -683,8 +686,12 @@ def _style_controls(spec: viz.DataSpec, hints: viz.ColumnHints) -> look.StyleSpe
             default=_STYLE_DEFAULTS.sort,
             required=True,
         )
-    toggle("smooth", "Smooth lines")
     toggle("area", "Fill area")
+    toggle(
+        "connect_gaps",
+        "Connect gaps",
+        help="Join the line across intervals or periods without a value.",
+    )
     toggle("trend", "Trend line")
     toggle("donut", "Donut")
     label = "Percent on slices" if kind == _K.PIE else "Value labels"
@@ -760,7 +767,7 @@ def _config_json(spec: viz.DataSpec, chart_style: look.StyleSpec, auto_title: st
     config = {
         "version": 1,
         "data": viz.spec_to_dict(spec),
-        "style": look.style_to_dict(chart_style, auto_title=auto_title),
+        "style": look.style_to_dict(chart_style, spec.kind, auto_title=auto_title),
     }
     return json.dumps(config, indent=2, ensure_ascii=False)
 
@@ -816,12 +823,13 @@ def _apply_config(spec: viz.DataSpec, chart_style: look.StyleSpec, hints: viz.Co
     most = VisualizeConfig.max_slices if kind == _K.PIE else VisualizeConfig.max_shown_categories
     state.put_widget(_key(f"{kind}_top_k"), min(max(spec.top_k, _MIN_TOP_K), most))
     state.put_widget(_key(f"{kind}_trim"), spec.trim)
+    state.put_widget(_key(f"{kind}_min_rows"), min(max(spec.min_rows, 1), _MAX_MIN_ROWS))
     _apply_filters(spec.filters, hints)
-    for field, widget in _STYLE_WIDGETS.items():
+    for field, key in _STYLE_KEYS.items():
         value = getattr(chart_style, field)
         if field == "color" and value is None:
             continue
-        state.put_widget(widget.key, value)
+        state.put_widget(key, value)
 
 
 def _apply_filters(filters: Iterable[viz.RowFilter], hints: viz.ColumnHints) -> None:

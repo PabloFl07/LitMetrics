@@ -161,6 +161,9 @@ AGGREGATIONS: dict[ChartKind, tuple[Agg, ...]] = {
     ChartKind.BOXPLOT: (),
 }
 DEFAULT_AGGREGATIONS = (Agg.MEAN, Agg.SUM, Agg.MEDIAN, Agg.MIN, Agg.MAX)
+# Aggregations that summarize the rows of a point instead of adding them up: from a handful of
+# rows they are noise (``VisualizeConfig.min_rows_per_point``).
+_SUMMARIES = frozenset({Agg.MEAN, Agg.MEDIAN, Agg.MIN, Agg.MAX})
 
 
 # Row filters: part of the cache key (R-V8), so frozen and JSON-friendly (ISO dates, floats).
@@ -230,6 +233,8 @@ class DataSpec:
         time_unit: Bucket of a time series.
         trim: Leave extreme values out of histograms and numeric or time axes, so a few
             placeholder dates (9999-12-31) or wrong numbers do not squash the chart.
+        min_rows: Bar or line on intervals of a numeric x: rows an interval needs for its
+            mean, median, min or max to be drawn (1 draws every one).
         filters: Rows kept: those that pass every filter.
     """
 
@@ -243,6 +248,7 @@ class DataSpec:
     top_k: int = 20
     time_unit: TimeUnit = TimeUnit.AUTO
     trim: bool = True
+    min_rows: int = VisualizeConfig.min_rows_per_point
     filters: tuple[RowFilter, ...] = ()
 
 
@@ -695,6 +701,7 @@ def spec_from_dict(raw: Mapping[str, Any]) -> DataSpec:
         top_k=_bounded(raw.get("top_k", 20), "top_k"),
         time_unit=TimeUnit(raw.get("time_unit", TimeUnit.AUTO)),
         trim=_typed(raw.get("trim", True), bool, "trim"),
+        min_rows=_bounded(raw.get("min_rows", VisualizeConfig.min_rows_per_point), "min_rows"),
         filters=tuple(_filter_from_dict(f) for f in filters),
     )
 
@@ -1033,8 +1040,7 @@ def _intervals(sub: pd.DataFrame, spec: DataSpec) -> tuple[pd.DataFrame, pd.Seri
     keep &= (values >= low) & (values <= high)
     sub, values = sub[keep], values[keep]
     _, edges = histogram(values, spec.bins, low, high)
-    ends = value_labels(edges)
-    labels = list(dict.fromkeys(f"{a} to {b}" for a, b in pairwise(ends)))
+    labels = list(dict.fromkeys(_interval_labels(edges)))
     # The last interval includes its upper end, as in ``np.histogram``.
     codes = np.clip(np.searchsorted(edges, values, side="right") - 1, 0, len(labels) - 1)
     keys = pd.Series(
@@ -1043,17 +1049,69 @@ def _intervals(sub: pd.DataFrame, spec: DataSpec) -> tuple[pd.DataFrame, pd.Seri
     return sub, keys, labels
 
 
+# Interval labels are written with fixed decimals up to these: past them (tiny widths, huge
+# values) the decimals or digits are noise, and ``value_labels`` writes them shorter.
+_MAX_LABEL_DECIMALS = 6
+_MAX_LABEL_NUMBER = 1e9
+
+
+def _interval_labels(edges: np.ndarray) -> list[str]:
+    """Labels of the intervals between ``edges`` ("0.50 to 1.35"), every end with the same
+    decimals: whole numbers when every edge is one, else enough to tell apart a tenth of the
+    width of an interval. Ends that would still look alike, or numbers too long to write out,
+    take the shortest distinct form of ``columns.value_labels`` instead.
+    """
+    width = float(edges[1] - edges[0]) if len(edges) > 1 else 0.0
+    if np.all(edges == np.round(edges)):
+        decimals = 0
+    elif width > 0:
+        decimals = max(0, int(np.ceil(-np.log10(width))) + 1)
+    else:
+        decimals = _MAX_LABEL_DECIMALS + 1
+    ends = [f"{e:,.{decimals}f}" for e in edges]
+    too_long = decimals > _MAX_LABEL_DECIMALS or float(np.abs(edges).max()) >= _MAX_LABEL_NUMBER
+    if too_long or len(set(ends)) < len(ends):
+        ends = list(value_labels(edges))
+    return [f"{a} to {b}" for a, b in pairwise(ends)]
+
+
 def _aggregate(
-    frame: pd.DataFrame, keys: list[pd.Series], value: str | None, agg: Agg
-) -> pd.Series:
+    frame: pd.DataFrame,
+    keys: list[pd.Series],
+    value: str | None,
+    agg: Agg,
+    min_rows: int = 1,
+) -> tuple[pd.Series, int]:
     """``agg`` of column ``value`` by ``keys`` (rows when ``value`` is None or ``agg`` COUNT).
 
     Groups on categories with ``observed=True`` (R-V9): only combinations that exist.
+
+    Args:
+        min_rows: Rows a group needs for a mean, median, min or max (``_SUMMARIES``); with
+            fewer it is missing (NaN). Counts and sums are never left out.
+
+    Returns:
+        The aggregated values, and how many groups were left out for having too few rows.
     """
     grouped = frame.groupby(keys, observed=True, sort=True)
     if value is None or agg == Agg.COUNT:
-        return grouped.size()
-    return grouped[value].agg(str(agg))
+        return grouped.size(), 0
+    result = grouped[value].agg(str(agg))
+    if min_rows <= 1 or agg not in _SUMMARIES:
+        return result, 0
+    thin = grouped.size() < min_rows
+    return result.mask(thin), int(thin.sum())
+
+
+def _thin_note(thin: int, spec: DataSpec) -> list[str]:
+    """Note of the points ``_aggregate`` left out (none when ``thin`` is 0)."""
+    if not thin:
+        return []
+    what = "point" if thin == 1 else "points"
+    return [
+        f"{thin:,} {what} with fewer than {spec.min_rows:,} rows not drawn "
+        f"(Min rows per interval): a {spec.agg} of so few rows is noise."
+    ]
 
 
 def _clean(value: Any) -> float | int | None:
@@ -1068,6 +1126,9 @@ def _clean(value: Any) -> float | int | None:
 def _bars(df: pd.DataFrame, spec: DataSpec) -> ChartData:
     """Bar and pie: one bar (slice) per category or interval of a numeric x, optionally split
     in one series per group. Also a line over a numeric x (one point per interval).
+
+    Intervals with fewer than ``spec.min_rows`` rows get no mean, median, min or max, and a
+    group with no interval left is not drawn.
     """
     is_pie = spec.kind == ChartKind.PIE
     agg = Agg.SUM if is_pie and spec.value else spec.agg
@@ -1090,13 +1151,22 @@ def _bars(df: pd.DataFrame, spec: DataSpec) -> ChartData:
         )
         keys, other, note = _top_categories(sub[spec.x], k)
         notes += [note] if note else []
+    # Intervals of a numeric x read as a trend: a point of a few rows is a false spike.
+    # Categories are named one by one, and the person sees what each one is.
+    least = spec.min_rows if intervals is not None else 1
     if group is None:
-        table = _aggregate(sub, [keys], spec.value, agg).to_frame(_value_name(spec))
+        values, thin = _aggregate(sub, [keys], spec.value, agg, least)
+        table = values.to_frame(_value_name(spec))
     else:
         groups, _, gnote = _top_categories(sub[group], VisualizeConfig.max_series)
         notes += [gnote] if gnote else []
+        values, thin = _aggregate(sub, [keys, groups], spec.value, agg, least)
         # unstack of an already aggregated, small series: pivot_table would group again.
-        table = _aggregate(sub, [keys, groups], spec.value, agg).unstack()  # noqa: PD010
+        table = values.unstack()  # noqa: PD010
+    notes += _thin_note(thin, spec)
+    if thin:
+        # A group whose every interval was too thin has no line or bar left: no legend entry.
+        table = table.dropna(axis=1, how="all")
     if intervals is not None:
         # Every interval, also the empty ones, so the axis keeps its scale.
         table = table.reindex(intervals)
@@ -1168,8 +1238,7 @@ def _histogram(df: pd.DataFrame, spec: DataSpec) -> ChartData:
         dates = [pd.Timestamp(np.datetime64(round(e), unit)) for e in edges]
         labels = tuple(f"{a:%Y-%m-%d} to {b:%Y-%m-%d}" for a, b in pairwise(dates))
     else:
-        ends = value_labels(edges)
-        labels = tuple(f"{a} to {b}" for a, b in pairwise(ends))
+        labels = tuple(_interval_labels(edges))
     if spec.group is None:
         series = (Series("Rows", tuple(counts)),)
     else:
@@ -1232,12 +1301,13 @@ def _line(df: pd.DataFrame, spec: DataSpec) -> ChartData:
     periods = dates.dt.to_period(_UNIT_FREQ[unit])
     full = pd.period_range(periods.min(), periods.max(), freq=_UNIT_FREQ[unit])
     filled = spec.value is None or spec.agg in (Agg.COUNT, Agg.SUM)
+    # No minimum of rows per period: a daily series often has one row a day.
     if spec.group is None:
-        table = _aggregate(sub, [periods], spec.value, spec.agg).to_frame(_value_name(spec))
+        table = _aggregate(sub, [periods], spec.value, spec.agg)[0].to_frame(_value_name(spec))
     else:
         groups, _, gnote = _top_categories(sub[spec.group], VisualizeConfig.max_series)
         notes += [gnote] if gnote else []
-        table = _aggregate(sub, [periods, groups], spec.value, spec.agg).unstack()  # noqa: PD010 (aggregated)
+        table = _aggregate(sub, [periods, groups], spec.value, spec.agg)[0].unstack()  # noqa: PD010 (aggregated)
     # Every bucket, also the empty ones: no rows is 0 rows, but a mean of nothing is a gap.
     # Unless even by year there are too many (untrimmed placeholder dates): then only the
     # buckets with rows, so the browser never gets thousands of empty years (R-V2).
@@ -1368,7 +1438,7 @@ def _heatmap(df: pd.DataFrame, spec: DataSpec) -> ChartData:
     xs, _, xnote = _top_categories(sub[spec.x], k)
     ys, _, ynote = _top_categories(sub[spec.y], k)
     notes += [n for n in (xnote, ynote) if n]
-    table = _aggregate(sub, [xs, ys], spec.value, spec.agg)
+    table, _ = _aggregate(sub, [xs, ys], spec.value, spec.agg)
     columns = tuple(str(c) for c in xs.cat.categories)
     rows = tuple(str(c) for c in ys.cat.categories)
     col_index = {c: i for i, c in enumerate(columns)}

@@ -145,6 +145,10 @@ class VisualizeConfig:
     x_bins: int = 10
     # Bars of a histogram at first.
     histogram_bins: int = 30
+    # Rows an interval of a bar or line chart on a numeric x needs at first for its mean,
+    # median, min or max to be drawn ("Min rows per interval"). Fewer make lone spikes and
+    # drops that look like a trend. Counts and sums are always drawn.
+    min_rows_per_point: int = 5
     # Extreme values are trimmed when the whole range is this many times the central one...
     trim_ratio: float = 10.0
     # ...and the central range goes from this quantile to 1 minus it.
