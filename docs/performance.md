@@ -81,8 +81,9 @@ explaining the reason again, for example: *"cache this per section, not per meas
   part of the key.
 - **R-C3. Every cached function has a limit.**
   - Profile functions: `max_entries=3`, the last datasets opened.
-  - Visualization functions: `max_entries` from 32 to 64, because there are many combinations
-    of parameters (R-V3).
+  - Visualization functions: `chart_data` keeps `VisualizeConfig.cache_max_charts` (256)
+    entries, because there are many combinations of parameters (R-V3) and each is small:
+    about 1 KB for bars, up to ~420 KB for a scatter of 10,000 points (R-V2).
   - Streamlit 1.66 has no limit by size (`max_size`, `server.maxCacheDataSize` do not exist):
     `max_entries` is the only bound. Keep entries small (R-C1) so that the count is enough.
 - **R-C4. The dataset is stored in one place, without copies.** It goes in `st.session_state`

@@ -3,8 +3,9 @@
 Streamlit app to explore a dataset: load a file, check its quality and plot it with ECharts.
 Flow of the user: Load → Profile → Visualization.
 
-Status: Home, Load (CSV, SQLite, Excel, Parquet, Feather), Profile and Export (CSV, Parquet,
-Feather, from the sidebar) work. Visualization is a stub.
+Status: Home, Load (CSV, SQLite, Excel, Parquet, Feather), Profile, Visualization (a chart
+builder: 7 kinds, row filters, style, save / load as JSON) and Export (CSV, Parquet, Feather,
+from the sidebar) work.
 
 ## Commands
 
@@ -49,6 +50,8 @@ src/litmetrics/
     columns.py      Column table of Profile: overview, per-type tables, one column (inspector)
     sampling.py     Random samples with a fixed seed (numpy positions), shared by every module
     parallel.py     map_columns: one column per thread, for numpy work only (R-P8)
+    visualize.py    Visualization data: ROLES of each chart kind, ColumnHints (columns offered),
+                    DataSpec + row filters (the cache key) -> ChartData, configuration as JSON
   ui/             The only package that imports streamlit
     state.py        The ONLY module that touches st.session_state
     cache.py        Cache wrappers around core functions (load_dataset, Profile sections) and
@@ -58,6 +61,9 @@ src/litmetrics/
     text.py         Text for the user: ``md`` escapes names drawn as Markdown, ``format_bytes``
     reading.py      Reads a dataset into the session (Load page, and the table picked anywhere)
     charts.py       ECharts option builders: plain dicts, no streamlit, no streamlit_echarts
+    chart_style.py  Visualization look: StyleSpec, build_option(ChartData, style) -> option,
+                    palettes from the theme, style as JSON. Plain dicts, like charts.py
+    skip.py         "Skip columns" selector shared by Profile and Visualization
     echarts.py      The only module importing streamlit_echarts: ``echarts.show`` draws themed charts
     theme.py        Reads the theme (both modes): CSS variables --lm-* and chart colors
     style.py        Injects the variant stylesheet, page header and cards (``style.card``)
@@ -197,8 +203,8 @@ drafts/           Design notes and plans (Spanish). Intent, not truth: the code 
 - `streamlit_echarts` (0.7) cannot even be imported outside a running Streamlit app (not even
   `JsCode`), so `litmetrics.ui.pages.profile` cannot be imported from plain pytest. Test pages
   through `AppTest` (see `tests/integration/`), and test `ui/charts.py` builders directly. JavaScript
-  callbacks in builders would need a `Js` marker converted to `JsCode` in `ui/echarts.py`: no
-  builder has one yet, so neither exists. The `add-chart` skill has the code to add them.
+  callbacks in builders are `charts.Js` markers (the number formatters of `ui/chart_style.py`),
+  turned into `JsCode` by `echarts.show`; in tests, `json.dumps(option, default=lambda o: o.code)`.
 - AppTest does not run the chart's JavaScript: selection and chart events are only testable in
   the browser (Playwright).
 - `AppTest.switch_page()` does not work with pages defined as functions. Smoke tests run each

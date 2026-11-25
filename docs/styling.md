@@ -161,6 +161,7 @@ Variants in `StyleConfig.standalone_variants` (4) load only their own stylesheet
 | `.st-key-headline` | Row of metrics shown as KPI cards | Load and Profile pages |
 | `.st-key-inspector` | Column inspector of Profile | Profile page |
 | `[class*="st-key-measure_card_"]` | Measure groups of the inspector | Profile page |
+| `[class*="st-key-viz_range_ends_"]` | "From" / "To" of a range filter, without +/- | Visualization page |
 
 Renaming one of these keys in a page breaks its style silently: search the stylesheets first.
 
@@ -168,7 +169,8 @@ Renaming one of these keys in a page breaks its style silently: search the style
 
 By `data-testid`: `stHeader`, `stTopNavLink`, `stMetric`, `stMetricLabel`, `stMetricValue`,
 `stTabs`, `stDataFrame`, `stExpander`, `stForm`, `stFileUploaderDropzone`,
-`stCaptionContainer`, `stMarkdownBadge`, `stNumberInputField`, `stSliderThumbValue`.
+`stCaptionContainer`, `stMarkdownBadge`, `stNumberInputField`, `stNumberInputStepUp`,
+`stNumberInputStepDown`, `stSliderThumbValue`.
 
 These are not a public API. After upgrading Streamlit, run the browser check of the `verify`
 skill and look at every variant.

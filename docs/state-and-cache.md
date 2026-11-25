@@ -20,8 +20,8 @@ model as a whole: what lives where, how long it lives, and who can see it.
 │                                               part, loaded_at, file)     │
 │                          LRU, LoadConfig.cache_max_datasets (5)          │
 │                                                                          │
-│   st.cache_data ─────► Profile results (aggregates), keyed by dataset_id │
-│                          or view_id, ProfileConfig.cache_max_* entries   │
+│   st.cache_data ─────► Profile and chart results (aggregates), keyed by  │
+│                          dataset_id or view_id                           │
 └──────────────────────────────────────────────────────────────────────────┘
           ▲  same objects, no copy                ▲
           │                                       │
@@ -85,6 +85,12 @@ use `@st.cache_data`. They return aggregates whose size grows with the number of
 of rows, so copying them on each hit is cheap (R-C1). Each has a `max_entries`
 (`ProfileConfig.cache_max_datasets`, or `cache_max_columns` for the inspector) (R-C3).
 
+The Visualization wrappers follow the same rules. `column_hints` (the columns a chart can
+offer, `VisualizeConfig.cache_max_hints`) depends on the set of columns, so it takes `view_id`.
+`chart_data` (`VisualizeConfig.cache_max_charts`, many small entries: R-V3) takes the id of the
+whole dataset and the frozen `DataSpec`, filters included (R-V8): a chart only reads its own
+columns, so skipping others does not throw its entries away.
+
 Conventions (details in `docs/data-loading.md` → *Caching*):
 
 - `dataset_id` comes first and is the real key. The data goes as `_df` / `_source` / `_unparsed`
@@ -137,8 +143,12 @@ rerun from `app.py` and fills only the missing keys.
 | `multipart` | File with several datasets: `(Source, Parts)`, its bytes included | `None` |
 | `part` | Dataset of that file picked by the user | `None` (the first) |
 | `schema` | `Schema` of the active dataset | `None` |
-| `skipped_columns` | Columns left out of the profile | `()` |
+| `skipped_columns` | Columns left out of Profile and Visualization | `()` |
 | `w_*` | Widgets whose options depend on the columns (`state.widget_key`) | — |
+| `widget_prefs` | Last value of the remembered widgets (`kept_widget`), by key; `w_*` ones cleared with the dataset | `{}` |
+| `chart_config_uploads` | Chart configurations loaded in Visualization (part of its uploader key) | `0` |
+| `chart_config_messages` | What the last configuration load said, shown once | `()` |
+| `chart_filters` | Ids of the row filter cards of Visualization, in order; each names the widgets `w_viz_filter_<id>_column` / `_value`. Cleared with the dataset | `()` |
 | `dataset_switcher` | Sidebar selector of datasets | Set to `dataset_id` before each draw |
 | `part_switcher` | Sidebar selector of tables | Set to the active part before each draw |
 
@@ -168,6 +178,13 @@ own marker (`upload_id`), so it is not read again either.
   dataset can also change from the Load page.
 - Values are changed from `on_change` / `on_click` callbacks, never after the widget was drawn
   in the same rerun.
+- Streamlit deletes the state of a widget that is not drawn in a rerun (another chart kind,
+  another page). Widgets that must come back as they were are drawn with
+  `state.kept_widget(st.toggle, "Label", key=..., default=...)`, which stores their value in
+  `widget_prefs` and restores it before the next draw. `restore_widget` / `remember_widget`
+  do the same around a widget drawn by hand, `put_widget` sets one from a callback (Reset,
+  a loaded configuration) and `forget_widgets` sends them back to their defaults. Visualization
+  uses them for every editor option, so the options of a chart kind survive drawing another.
 
 ### Order of a rerun (`app.py`)
 
@@ -188,11 +205,11 @@ Reloading the page (F5, opening the URL again, a new tab) starts a **new Streaml
 | After a reload | Kept? | Why |
 |---|---|---|
 | Datasets read (library) | **Yes** | `st.cache_resource`, process-wide |
-| Profile results | **Yes** | `st.cache_data`, process-wide; opening the dataset again is a cache hit |
+| Profile and chart results | **Yes** | `st.cache_data`, process-wide; opening the dataset again is a cache hit |
 | Current page | Yes | It is in the URL (`url_path` of `st.Page`: `/profile`, `/load`...) |
 | Active dataset (`dataset`, `dataset_id`) | **No** | Session state |
 | Schema | No, but it comes back | Stored in the `LibraryEntry`; restored by `switch_dataset` |
-| Skipped columns, open tab, selected method, other `w_*` widgets | No | Session state; they start from their defaults |
+| Skipped columns, open tab, selected method, chart options, other `w_*` widgets | No | Session state; they start from their defaults |
 | File in the uploader | No | The browser forgets it |
 | File with several datasets (`multipart`, its bytes, `part`) | No, but it comes back | Its tables read are still in the library (`file / table`) with the file (`LibraryEntry.file`, up to `LoadConfig.keep_file_max_mb`): opening one reopens the file and its table selector |
 | Remembered read error | No | The file is no longer in the uploader anyway |
