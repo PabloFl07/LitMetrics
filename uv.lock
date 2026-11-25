@@ -341,6 +341,7 @@ name = "litmetrics"
 version = "0.5.0"
 source = { editable = "." }
 dependencies = [
+    { name = "jinja2" },
     { name = "numpy" },
     { name = "pandas" },
     { name = "pyarrow" },
@@ -360,6 +361,7 @@ dev = [
 
 [package.metadata]
 requires-dist = [
+    { name = "jinja2", specifier = ">=3.1.6" },
     { name = "numpy", specifier = ">=2.5.4" },
     { name = "pandas", specifier = ">=3.1.0" },
     { name = "pyarrow", specifier = ">=26.0.0" },
