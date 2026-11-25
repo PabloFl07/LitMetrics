@@ -46,7 +46,10 @@ src/litmetrics/
     io/export.py    Writes a DataFrame as CSV / Parquet / Feather bytes, the warnings shown
                     before the download and the report of values written empty (sidebar Export)
     schema.py       Semantic type of each column, and conversion to its dtype at load time
-    profile.py      Base pass (missing, distinct, duplicates), correlation, issues
+    profile.py      Base pass (missing, distinct, duplicates), correlation, issues and
+                    ISSUE_INFO (title, severity, why, action of each kind of issue)
+    report.py       Data quality report as Markdown (Issues tab, "Download report"), rendered
+                    with Jinja2 from templates/issues_report.md.j2 and results already computed
     columns.py      Column table of Profile: overview, per-type tables, one column (inspector)
     sampling.py     Random samples with a fixed seed (numpy positions), shared by every module
     parallel.py     map_columns: one column per thread, for numpy work only (R-P8)
