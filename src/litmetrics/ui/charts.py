@@ -5,6 +5,7 @@ Every builder receives data already aggregated (counts, bins, a capped list of p
 whole column (R-V2 in docs/performance.md).
 """
 
+from collections.abc import Callable
 from dataclasses import dataclass
 from typing import Any
 
@@ -25,6 +26,28 @@ _SPLIT_LINE = {"type": "dashed", "color": "rgba(128, 128, 128, 0.25)"}
 # recolor them: in dark mode only the stroke could be read and the letters looked hollow.
 # Such labels get the text color of the theme (``ChartColors.emphasis``) instead.
 _NO_OUTLINE = {"textBorderWidth": 0, "textBorderColor": "transparent", "textShadowBlur": 0}
+
+
+@dataclass(frozen=True)
+class Js:
+    """A JavaScript function for an ECharts option (a ``formatter``...).
+
+    ``ui/echarts.py`` turns it into ``JsCode`` when the chart is drawn, so this module never
+    imports ``streamlit_echarts``. In tests, ``json.dumps(option, default=lambda o: o.code)``.
+    """
+
+    code: str
+
+
+def replace_js(value: Any, wrap: Callable[[str], Any]) -> Any:
+    """Copy of ``value`` with every ``Js`` replaced by ``wrap(js.code)``; the rest is shared."""
+    if isinstance(value, Js):
+        return wrap(value.code)
+    if isinstance(value, dict):
+        return {k: replace_js(v, wrap) for k, v in value.items()}
+    if isinstance(value, (list, tuple)):
+        return [replace_js(v, wrap) for v in value]
+    return value
 
 
 @dataclass(frozen=True)

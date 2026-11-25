@@ -56,6 +56,7 @@ _MIN_TOP_K = 3
 # Highest "Min rows per interval" (``DataSpec`` takes up to 1,000).
 _MAX_MIN_ROWS = 1_000
 _SORT_LABELS = {"data": "Default", "desc": "Value ↓", "asc": "Value ↑", "label": "A-Z, 1-9"}
+_AXIS_FORMAT_LABELS = {"full": "1,250,000", "compact": "1.25M"}
 
 _K = viz.ChartKind
 # Aggregations whose values add up, so series of them can be stacked: a stack of means is a
@@ -78,6 +79,8 @@ _STYLE_KEYS: dict[str, str] = {
     "trend": "viz_trend",
     "donut": "viz_donut",
     "labels": "viz_labels",
+    "label_decimals": "viz_label_decimals",
+    "axis_format": "viz_axis_format",
     "log_scale": "viz_log",
     "legend": "viz_legend",
     "size": "viz_size",
@@ -696,6 +699,29 @@ def _style_controls(spec: viz.DataSpec, hints: viz.ColumnHints) -> look.StyleSpe
     toggle("donut", "Donut")
     label = "Percent on slices" if kind == _K.PIE else "Value labels"
     toggle("labels", label, help=_LABELS_HELP.get(kind))
+    # A heatmap writes its values on small grids even with "Value labels" off.
+    if _draws("label_decimals", kind) and (options.get("labels") or kind == _K.HEATMAP):
+        options["label_decimals"] = state.kept_widget(
+            st.number_input,
+            "Label decimals",
+            key=keys["label_decimals"],
+            default=_STYLE_DEFAULTS.label_decimals,
+            min_value=0,
+            max_value=look.MAX_DECIMALS,
+            step=1,
+            help="Values written on the chart are rounded to this many decimals.",
+        )
+    if _draws("axis_format", kind):
+        options["axis_format"] = state.kept_widget(
+            st.segmented_control,
+            "Axis numbers",
+            list(_AXIS_FORMAT_LABELS),
+            format_func=_AXIS_FORMAT_LABELS.__getitem__,
+            key=keys["axis_format"],
+            default=_STYLE_DEFAULTS.axis_format,
+            required=True,
+            help="In full with thousands separators, or shortened (K, M, B).",
+        )
     toggle("log_scale", "Log scale", help="Zeros and negative values are not drawn.")
     # Only when there is more than one thing to name: series, a trend line or slices.
     toggle("legend", "Legend", when=not one_series or kind in (_K.PIE, _K.SCATTER))

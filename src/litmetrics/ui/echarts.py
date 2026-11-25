@@ -3,13 +3,14 @@
 
 Pages build the option with ``ui/charts.py`` (colors from ``theme.chart_colors()``) and draw it
 with ``show``. ``show`` lays the shared look underneath (series palette, font, transparent
-background) and keeps the ``"streamlit"`` theme of ``st_echarts``, which follows light / dark
-mode for text, axes and tooltips in the browser.
+background), turns the ``charts.Js`` functions into ``JsCode`` and keeps the ``"streamlit"``
+theme of ``st_echarts``, which follows light / dark mode for text, axes and tooltips in the
+browser.
 """
 
 from typing import Any
 
-from streamlit_echarts import st_echarts
+from streamlit_echarts import JsCode, st_echarts
 
 from litmetrics.ui import charts, theme
 
@@ -24,7 +25,7 @@ def show(option: dict[str, Any], *, key: str, height: str, **kwargs: Any) -> Any
         kwargs: Other arguments of ``st_echarts`` (``events``, ``on_select``...).
     """
     return st_echarts(
-        charts.themed(option, theme.chart_theme()),
+        charts.replace_js(charts.themed(option, theme.chart_theme()), JsCode),
         height=height,
         key=key,
         theme="streamlit",

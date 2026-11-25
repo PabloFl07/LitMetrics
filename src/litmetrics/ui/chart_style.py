@@ -19,13 +19,15 @@ from dataclasses import dataclass, fields
 from typing import Any, Literal, get_args
 
 from litmetrics.core.visualize import ChartData, ChartKind, Series
-from litmetrics.ui.charts import ChartColors, mix, with_alpha
+from litmetrics.ui.charts import ChartColors, Js, mix, with_alpha
 
 # The only color format ``with_alpha`` and ``mix`` read, and what ``st.color_picker`` returns.
 _HEX_COLOR = re.compile(r"#[0-9a-fA-F]{6}")
 
 type SortOrder = Literal["data", "desc", "asc", "label"]
 type ChartSize = Literal["small", "medium", "large"]
+# How the numbers of a value axis are written: "full" (1,250,000) or "compact" (1.25M).
+type AxisFormat = Literal["full", "compact"]
 
 # Height (px) of each chart size.
 HEIGHTS: dict[ChartSize, int] = {"small": 340, "medium": 460, "large": 640}
@@ -74,6 +76,11 @@ _LABEL_CHAR_PX = 6.5
 # Numbers inside a category label, for the natural order ("item 2" before "item 10").
 # Thousands separators are part of the number ("1,000 to 2,000" are interval labels).
 _NUMBER = re.compile(r"(\d[\d,]*(?:\.\d+)?)")
+# Most decimals a value label can be rounded to.
+MAX_DECIMALS = 6
+# Significant digits of an axis number below 1, and decimals of one above (enough for any tick
+# ECharts picks, few enough to hide float noise such as 0.30000000000000004).
+_AXIS_DIGITS = 6
 
 
 @dataclass(frozen=True)
@@ -89,6 +96,10 @@ class StyleSpec:
             None to keep the palette.
         legend: Show the legend (on top). Only drawn with more than one series, or for a pie.
         labels: Values written on bars, slices, points and cells.
+        label_decimals: Decimals the values written on bars, points and cells are rounded to
+            (0 to ``MAX_DECIMALS``); whole numbers never get trailing zeros.
+        axis_format: Numbers of the value axes (and of the heatmap scale) in full with
+            thousands separators, or compact (1.2K, 3.4M). Never in scientific notation.
         horizontal: Bars and boxes along the y axis.
         color_each: Boxplot: each box takes the next color of the palette, instead of all of
             them the first one.
@@ -112,6 +123,8 @@ class StyleSpec:
     color: str | None = None
     legend: bool = True
     labels: bool = False
+    label_decimals: int = 2
+    axis_format: AxisFormat = "full"
     horizontal: bool = False
     color_each: bool = False
     stack: bool = False
@@ -148,6 +161,9 @@ STYLE_KINDS: dict[str, frozenset[ChartKind]] = {
     "opacity": frozenset({ChartKind.SCATTER}),
     "trend": frozenset({ChartKind.SCATTER}),
     "labels": _ALL - {ChartKind.SCATTER, ChartKind.BOXPLOT},
+    # A pie writes the share, already rounded to one decimal.
+    "label_decimals": _ALL - {ChartKind.SCATTER, ChartKind.BOXPLOT, ChartKind.PIE},
+    "axis_format": _ALL - {ChartKind.PIE},
     "log_scale": _ALL - {ChartKind.PIE},
 }
 
@@ -163,6 +179,7 @@ _NOT_SAVED = frozenset({"palette"})
 _CHOICES: dict[str, tuple[str, ...]] = {
     "sort": get_args(SortOrder.__value__),
     "size": get_args(ChartSize.__value__),
+    "axis_format": get_args(AxisFormat.__value__),
 }
 
 
@@ -214,6 +231,9 @@ def style_from_dict(raw: Mapping[str, Any]) -> StyleSpec:
             ok = isinstance(value, str)
         if ok and f.name in _CHOICES:
             ok = value in _CHOICES[f.name]
+        if ok and f.name == "label_decimals":
+            # The browser rejects a fraction or more than 100 decimals: the chart goes blank.
+            ok = isinstance(value, int) and 0 <= value <= MAX_DECIMALS
         if not ok:
             raise ValueError(f"Style {f.name!r} has a wrong value: {value!r}.")
         values[f.name] = value
@@ -311,9 +331,41 @@ def _value_axis(
     axis: dict[str, Any] = {
         "type": "log" if style.log_scale else "value",
         "splitLine": {"lineStyle": _SPLIT_LINE},
+        "axisLabel": {"formatter": axis_formatter(style.axis_format)},
         "scale": scale,
     }
     return axis | _axis_name(name, vertical=vertical)
+
+
+def axis_formatter(fmt: AxisFormat) -> Js:
+    """Formatter of the numbers of a value axis, written as ``fmt`` says.
+
+    ``toLocaleString`` never falls into scientific notation, which JavaScript uses below 1e-6
+    and from 1e21. Below 1 the number keeps its significant digits (0.000012), else it is
+    rounded to ``_AXIS_DIGITS`` decimals. "compact" shortens from a thousand on (1.25M).
+    """
+    full = (
+        f"Math.abs(v) < 1 ? v.toLocaleString('en-US', {{maximumSignificantDigits: {_AXIS_DIGITS}}})"
+        f" : v.toLocaleString('en-US', {{maximumFractionDigits: {_AXIS_DIGITS}}})"
+    )
+    if fmt == "compact":
+        full = (
+            "Math.abs(v) >= 1000 ? v.toLocaleString('en-US', "
+            f"{{notation: 'compact', maximumFractionDigits: 2}}) : {full}"
+        )
+    return Js(f"function (v) {{ return typeof v === 'number' ? ({full}) : v; }}")
+
+
+def label_formatter(decimals: int) -> Js:
+    """Formatter of the values written on marks: rounded to at most ``decimals`` decimals, with
+    thousands separators. The value is the last item when a point is a list (``[time, value]``
+    of a line, ``[x, y, value]`` of a heatmap cell).
+    """
+    return Js(
+        "function (p) { var v = Array.isArray(p.value) ? p.value[p.value.length - 1] : p.value;"
+        " return typeof v === 'number'"
+        f" ? v.toLocaleString('en-US', {{maximumFractionDigits: {decimals}}}) : ''; }}"
+    )
 
 
 def _category_axis(
@@ -445,6 +497,7 @@ def _bar(data: ChartData, style: StyleSpec, colors: ChartColors) -> dict[str, An
                 "label": _value_label(
                     style.labels,
                     "inside" if stacked else ("right" if style.horizontal else "top"),
+                    style,
                     colors,
                 ),
                 "emphasis": {"focus": "series"},
@@ -466,12 +519,16 @@ def _bar(data: ChartData, style: StyleSpec, colors: ChartColors) -> dict[str, An
     return option
 
 
-def _value_label(show: bool, position: str, colors: ChartColors) -> dict[str, Any]:
-    """Value written next to a bar or point. Outside the mark it takes the text color of the
-    theme without an outline (see ``_NO_OUTLINE``); inside a stacked bar ECharts already picks
-    a color that contrasts with the bar.
+def _value_label(
+    show: bool, position: str, style: StyleSpec, colors: ChartColors
+) -> dict[str, Any]:
+    """Value written next to a bar or point, rounded to ``style.label_decimals``. Outside the
+    mark it takes the text color of the theme without an outline (see ``_NO_OUTLINE``); inside
+    a stacked bar ECharts already picks a color that contrasts with the bar.
     """
     label: dict[str, Any] = {"show": show, "position": position}
+    if show:
+        label["formatter"] = label_formatter(style.label_decimals)
     if position != "inside":
         label |= {"color": colors.emphasis, **_NO_OUTLINE}
     return label
@@ -500,7 +557,7 @@ def _line(data: ChartData, style: StyleSpec, colors: ChartColors) -> dict[str, A
             "symbolSize": 5,
             "sampling": "lttb",
             "connectNulls": style.connect_gaps,
-            "label": _value_label(style.labels and points <= 40, "top", colors),
+            "label": _value_label(style.labels and points <= 40, "top", style, colors),
             "emphasis": {"focus": "series"},
         }
         for s in data.series
@@ -536,7 +593,7 @@ def _histogram(data: ChartData, style: StyleSpec, colors: ChartColors) -> dict[s
                 "opacity": _OVERLAY_OPACITY if overlay else 1,
                 "borderRadius": 0 if split else [3, 3, 0, 0],
             },
-            "label": _value_label(style.labels and len(s.data) <= 30, "top", colors),
+            "label": _value_label(style.labels and len(s.data) <= 30, "top", style, colors),
             "emphasis": {"focus": "series"},
         }
         for s in data.series
@@ -591,7 +648,12 @@ def _scatter(data: ChartData, style: StyleSpec, colors: ChartColors) -> dict[str
     return {
         "tooltip": {"trigger": "item"},
         "grid": _grid(data, style),
-        "xAxis": {"type": "value", "scale": True, "splitLine": {"lineStyle": _SPLIT_LINE}}
+        "xAxis": {
+            "type": "value",
+            "scale": True,
+            "splitLine": {"lineStyle": _SPLIT_LINE},
+            "axisLabel": {"formatter": axis_formatter(style.axis_format)},
+        }
         | _axis_name(data.x_name),
         "yAxis": _value_axis(data.y_name, style, scale=True),
         "dataZoom": [*_zoom("x"), *_zoom("y")],
@@ -763,13 +825,17 @@ def _heatmap(data: ChartData, style: StyleSpec, colors: ChartColors) -> dict[str
             "right": 8,
             "top": "middle",
             "inRange": {"color": scale},
+            "formatter": axis_formatter(style.axis_format),
         },
         "series": [
             {
                 "type": "heatmap",
                 "name": data.series[0].name if data.series else "",
                 "data": [list(c) for c in cells],
-                "label": {"show": show_labels},
+                "label": {
+                    "show": show_labels,
+                    "formatter": label_formatter(style.label_decimals),
+                },
                 "itemStyle": {"borderColor": colors.background, "borderWidth": 1},
                 "emphasis": {"itemStyle": {"borderColor": colors.emphasis, "borderWidth": 1}},
             }
