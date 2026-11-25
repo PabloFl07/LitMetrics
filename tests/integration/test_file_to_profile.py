@@ -2,9 +2,12 @@
 
 Each test runs the same steps the app runs for an upload, with the real modules and no
 mocks: ``formats.detect_options`` -> ``formats.load`` -> ``schema.prepare_dataset`` ->
-``profile`` / ``columns``. The unit tests check each step alone; these check that the steps
-agree with each other, which is where format-specific surprises show up.
+``profile`` / ``columns`` -> ``report``. The unit tests check each step alone; these check
+that the steps agree with each other, which is where format-specific surprises show up.
 """
+
+import re
+from datetime import datetime
 
 import numpy as np
 import pandas as pd
@@ -12,6 +15,7 @@ import pytest
 from fixtures import files, samples
 
 from litmetrics.core import columns as cols
+from litmetrics.core import report
 from litmetrics.core.io import formats
 from litmetrics.core.io.base import LoadedDataset, Source
 from litmetrics.core.profile import (
@@ -154,3 +158,47 @@ def test_issues_of_a_file_are_found_end_to_end():
     kinds = {i.kind for i in issues}
     assert {IssueKind.DUPLICATE_ROWS, IssueKind.CONSTANT, IssueKind.HIGH_CORRELATION} <= kinds
     assert (IssueKind.HIGH_MISSING, ("score",)) in {(i.kind, i.columns) for i in issues}
+
+
+def test_issues_report_of_a_file_lists_its_issues_by_severity():
+    """The report of a file lists every issue found, the most serious first, with its advice,
+    and the values the file had that could not be read.
+
+    Case: the report is built from different results than the Issues tab (an issue is
+    missing or listed twice), its issues keep the order they were found in, or the values
+    lost on load are not reported.
+    Affects: core/io (CSV path), core/schema.py, core/profile.py (detect_issues, ISSUE_INFO),
+    core/report.py
+    How: reads ``ORDERS_WITH_TYPOS_CSV`` with a duplicated row added, finds its issues as
+    ui/pages/profile.py does and reads the summary table and the sections of the report.
+    """
+    rows = samples.ORDERS_WITH_TYPOS_CSV.splitlines()
+    data = b"\n".join([*rows, rows[1], b""])
+    dataset, schema = _read("orders.csv", data)
+    base = base_profile(dataset.df)
+    issues = detect_issues(
+        base,
+        schema,
+        top_correlated_pairs(correlation_matrix(dataset.df, "pearson", 10, 1000).matrix),
+        high_missing_pct=50.0,
+        high_correlation=0.9,
+    )
+    settings = report.ReportSettings(50.0, 0.9, "pearson", None, 0, 1, 1)
+    markdown = report.issues_report(
+        dataset,
+        base,
+        schema,
+        issues,
+        settings,
+        memory="4 KB",
+        generated_at=datetime(2026, 11, 25),
+        version="0.0.0",
+    )
+    summary = re.findall(r"^\| (High|Medium|Low) \| ([^|]+) \|", markdown, flags=re.MULTILINE)
+    assert len(summary) == len(issues)
+    severities = [severity for severity, _ in summary]
+    assert severities == sorted(severities, key=["High", "Medium", "Low"].index)
+    assert ("Medium", "Duplicate rows") in summary
+    assert "**Suggested action:** " in markdown
+    assert "| `price` | 2 |" in markdown
+    assert "| `date` | 1 |" in markdown

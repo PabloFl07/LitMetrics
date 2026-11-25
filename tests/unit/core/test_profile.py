@@ -435,3 +435,15 @@ def test_detect_possible_id(df, column):
     How: pairs a distinct text / integer column with distinct floats; only the first is flagged.
     """
     assert _issues(df) == [(IssueKind.POSSIBLE_ID, (column,))]
+
+
+def test_every_issue_kind_is_described():
+    """Every kind of issue has its title, severity and advice for the report.
+
+    Case: a new ``IssueKind`` is detected but missing from ``ISSUE_INFO``, and the report of
+    any dataset with that issue fails with ``KeyError`` when downloaded.
+    Affects: core/profile.py (ISSUE_INFO, Issue.info)
+    How: compares the keys of ``ISSUE_INFO`` with ``IssueKind`` and checks each severity.
+    """
+    assert set(profile.ISSUE_INFO) == set(IssueKind)
+    assert all(info.severity in profile.SEVERITIES for info in profile.ISSUE_INFO.values())

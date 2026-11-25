@@ -68,6 +68,38 @@ def test_analyst_loads_a_spanish_export_and_sees_its_problems(app: Page, tmp_pat
     expect(issues).to_contain_text("país")
 
 
+def test_analyst_downloads_the_issues_report(app: Page, tmp_path):
+    """The issues of a dataset download as a Markdown report the user can share.
+
+    Given the Spanish sales export, with a duplicate row and a mostly empty column,
+    When the user opens the Issues tab of Profile and clicks "Download report",
+    Then the browser downloads ``ventas_issues.md`` with the dataset's size, its issues by
+    severity (the duplicate row as a medium one) and the advice for each.
+
+    Case: the function given to the download button fails when clicked (it runs in another
+    thread, which AppTest never runs), or the report is not the one of the dataset shown.
+    Affects: ui/pages/profile.py (_report_button), core/report.py, core/profile.py
+    How: uploads ``SALES_EXPORT_CSV``, catches the download of the Issues tab and reads it.
+    """
+    page = app
+    go_to(page, "Load")
+    upload(page, _file(tmp_path, "ventas.csv", samples.SALES_EXPORT_CSV))
+    go_to(page, "Profile")
+    issues = page.get_by_role("tabpanel", name="Issues")
+    with page.expect_download(timeout=RUN_TIMEOUT * 1000) as info:
+        issues.get_by_role("button", name="Download report").click()
+    download = info.value
+    expect_no_exception(page)
+
+    assert download.suggested_filename == "ventas_issues.md"
+    markdown = Path(download.path()).read_text("utf-8")
+    assert markdown.startswith("# Data quality report: ventas.csv\n")
+    assert "| Size | 41 rows " in markdown
+    assert "| Medium | Duplicate rows | whole dataset | 1 duplicate rows |" in markdown
+    assert "`descuento`" in markdown
+    assert "**Suggested action:** " in markdown
+
+
 def test_analyst_switches_tables_of_a_database_from_any_page(app: Page, tmp_path):
     """The tables of a database can be switched from the sidebar while on Profile.
 
