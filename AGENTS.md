@@ -53,8 +53,11 @@ src/litmetrics/
     columns.py      Column table of Profile: overview, per-type tables, one column (inspector)
     sampling.py     Random samples with a fixed seed (numpy positions), shared by every module
     parallel.py     map_columns: one column per thread, for numpy work only (R-P8)
-    visualize.py    Visualization data: ROLES of each chart kind, ColumnHints (columns offered),
-                    DataSpec + row filters (the cache key) -> ChartData, configuration as JSON
+    visualize/      Visualization data, all re-exported by the package (``visualize.<name>``):
+      spec.py         Chart kinds, ROLES of each one, row filters, DataSpec (the cache key), ChartData
+      hints.py        ColumnHints (columns offered), available kinds, default_spec
+      saved.py        Configuration as JSON and fit_to_dataset (a saved chart on another dataset)
+      data.py         chart_data (DataSpec + filters -> ChartData) and to_frame
   ui/             The only package that imports streamlit
     state.py        The ONLY module that touches st.session_state
     cache.py        Cache wrappers around core functions (load_dataset, Profile sections) and
@@ -75,7 +78,8 @@ src/litmetrics/
     styles/         Stylesheets of the style variants (docs/styling.md):
       styles_base.css Rules shared by style variants 0-3, loaded before the variant's own
       styles.css      CSS of style variant 0; styles_<n>.css of variant n
-    pages/          One module per page
+    pages/          One module per page; a large page is a package (profile/: page.py, columns_tab.py,
+                    shared.py) whose __init__ exports the entry point
 tests/            Levels and rules in "Tests" below
   conftest.py       Shared fixtures; marks each test with the level of its folder
   fixtures/         Test subjects: samples.py (named data), files.py (file bytes per format),

@@ -7,6 +7,40 @@ change behavior).
 
 ## [Unreleased]
 
+## [0.6.0] - 2026-11-26
+
+### Added
+
+- **Visualization page**: a chart builder on the active dataset. Seven kinds (bar, line,
+  histogram, scatter, boxplot, pie, heatmap), only those the dataset has columns for; row
+  filters on any column; style options; save and load the chart as JSON; the data behind the
+  chart as a table and CSV. Columns that never make a chart (constant, empty, free text,
+  identifiers, row numbers) are not offered.
+- Profile, Issues tab: "Download report" saves the issues as a Markdown report
+  (`<file>_issues.md`): the dataset (size, missing cells, duplicates, how it was read, columns
+  left out), a summary table of the issues by severity, each kind of issue explained once
+  (why it matters, what to do) with every case of it, the values changed on load, one row
+  per column, and the method: how each count is made and the exact criterion of each issue. Written
+  only on click, from results already computed. The words of each kind of issue are one table
+  in `core/profile.py` (`ISSUE_INFO`), for any later export of the issues. New dependency:
+  Jinja2 (already installed through Streamlit).
+- Home marks Visualization as ready and links to it from the active dataset ("Chart it").
+
+### Changed
+
+- "Skip columns" is shared by Profile and Visualization (`ui/skip.py`): a column skipped in
+  one page is skipped in the other.
+- The Profile page is the package `ui/pages/profile/`: `page.py`, `columns_tab.py` (Columns
+  tab and inspector) and `shared.py` (the active dataset, shared by every tab).
+
+### Fixed
+
+- Names from the user's files are shown as written wherever a page drew them as Markdown:
+  the title of the column inspector, read errors (Load and the table switcher), chart notes
+  and errors, and the messages of a loaded chart configuration (``*net*`` was italic, ``$x$``
+  a formula). Column names and spelling variants in inline code no longer break on a
+  backtick (`text.code`).
+
 ## [0.5.0] - 2026-11-21
 
 ### Added
@@ -202,7 +236,8 @@ change behavior).
 
 - Project structure: Streamlit app with top navigation, uv, ruff, pre-commit and pytest.
 
-[Unreleased]: https://github.com/PabloFl07/LitMetrics/compare/v0.5.0...HEAD
+[Unreleased]: https://github.com/PabloFl07/LitMetrics/compare/v0.6.0...HEAD
+[0.6.0]: https://github.com/PabloFl07/LitMetrics/compare/v0.5.0...v0.6.0
 [0.5.0]: https://github.com/PabloFl07/LitMetrics/compare/v0.4.0...v0.5.0
 [0.4.0]: https://github.com/PabloFl07/LitMetrics/compare/v0.3.0...v0.4.0
 [0.3.0]: https://github.com/PabloFl07/LitMetrics/compare/v0.2.0...v0.3.0
