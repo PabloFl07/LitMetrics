@@ -81,6 +81,7 @@ def run_profile(
     chart: str | None = None,
     skipped: tuple[str, ...] = (),
     extra_numeric: int = 0,
+    renamed: tuple[tuple[str, str], ...] = (),
 ) -> None:
     """Load ``samples.every_type_frame`` and draw part of the Profile page.
 
@@ -88,6 +89,8 @@ def run_profile(
     ``inspect`` (a column name), only the inspector of that column is drawn, since AppTest
     cannot select a row of a table; ``chart`` picks the chart of a numeric column. ``skipped``
     columns are left out of the profile. ``extra_numeric`` adds random numeric columns.
+    ``renamed`` gives columns other names, as ``(old, new)`` pairs (names that Markdown would
+    read).
     """
     import importlib
 
@@ -100,16 +103,21 @@ def run_profile(
 
     state.init_state()
     if state.get_dataset() is None:
-        df = every_type_frame(extra_numeric=extra_numeric)
+        df = every_type_frame(extra_numeric=extra_numeric).rename(columns=dict(renamed))
         dataset, schema = prepare_dataset(LoadedDataset(df, "people.csv", "CSV"))
-        state.set_dataset(dataset, "people", "people")
+        # Other columns are other data: their own id, or the cache (shared by every test of
+        # the process) answers with results of the plain frame.
+        dataset_id = f"people-{extra_numeric}-{renamed!r}" if extra_numeric or renamed else "people"
+        state.set_dataset(dataset, dataset_id, "people")
         state.set_schema(schema)
         state.set_skipped_columns(skipped)
     page = importlib.import_module("litmetrics.ui.pages.profile")
     if inspect:
         if chart is not None:
             st.session_state[state.widget_key("inspect_numeric_chart")] = chart
-        page._inspector(page._active(), inspect)
+        columns_tab = importlib.import_module("litmetrics.ui.pages.profile.columns_tab")
+        shared = importlib.import_module("litmetrics.ui.pages.profile.shared")
+        columns_tab._inspector(shared.active(), inspect)
         return
     st.session_state[state.widget_key("profile_tab")] = tab
     if view is not None:

@@ -76,7 +76,7 @@ def _load(uploaded: UploadedFile) -> None:
     # Checked before ``getvalue``, which copies the whole file on every call.
     if not state.upload_changed(source_id):
         if (error := state.get_read_error(source_id)) is not None:
-            st.error(error)
+            st.error(text.md(error))
         return
     state.mark_upload(source_id)
     source = _source(uploaded)
@@ -84,12 +84,12 @@ def _load(uploaded: UploadedFile) -> None:
         parts = formats.list_parts(source)
     except ReadError as e:
         state.set_read_error(source_id, str(e))
-        st.error(str(e))
+        st.error(text.md(e))
         return
     if parts is not None:
         state.set_multipart(source, parts)
     elif (error := reading.read(source, None, source_id)) is not None:
-        st.error(error)
+        st.error(text.md(error))
     else:
         # A file of one dataset replaces the file with several: its list goes away.
         state.clear_multipart()
@@ -249,7 +249,7 @@ def _parts() -> bool:
         return False
     source, parts = multipart
     if (error := reading.part_error()) is not None:
-        st.error(error)
+        st.error(text.md(error))
     active = reading.active_part()
     # The label names the active one, so it shows while collapsed. It changes with the
     # choice, which collapses the expander after picking a dataset.

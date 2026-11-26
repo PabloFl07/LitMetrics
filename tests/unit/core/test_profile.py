@@ -69,7 +69,7 @@ def test_base_profile_summary(quality_df):
     """The headline numbers of Profile: rows, missing cells, rows with missing, constants.
 
     Case: missing cells counted per row instead of per cell, or memory measured as 0.
-    Affects: core/profile.py (base_profile), shown in the headline of ui/pages/profile.py
+    Affects: core/profile.py (base_profile), shown in the headline of ui/pages/profile/page.py
     How: computes ``quality_df`` (2 missing cells of 20, in 2 rows; 1 constant column).
     """
     base = profile.base_profile(quality_df)

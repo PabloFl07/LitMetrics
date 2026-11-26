@@ -116,7 +116,7 @@ class ProfileConfig:
 @dataclass(frozen=True)
 class VisualizeConfig:
     """Settings of the Visualization page: limits of what reaches the browser (R-V2) and of
-    the heuristics that pick the first chart of each kind (``core/visualize.py``).
+    the heuristics that pick the first chart of each kind (``core/visualize/hints.py``).
     """
 
     # Points of a scatter chart: a random sample with a fixed seed above this.

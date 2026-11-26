@@ -1,25 +1,7 @@
-"""Profile page: how the active dataset looks, and what to check before analysing it.
-
-Headline quality numbers on top, then four tabs:
-- Issues: problems found, with a filter by kind.
-- Columns: an overview with one row per column and one table per semantic type, with only the
-  measures that make sense for it. Selecting a row of any of them inspects that column.
-- Missing values: by column, by row and a sample of incomplete rows.
-- Correlation: heatmap of the numeric columns and the strongest pairs.
-
-How it stays fast on large datasets (docs/performance.md):
-- Only the open tab runs (R-E1), and every tab with widgets is an ``st.fragment``, so a widget
-  reruns its tab and nothing else (R-E2). Fragments read the dataset from ``state``.
-- Everything is computed through ``ui/cache.py``, once per dataset. Expensive measures use a
-  sample, and the page says so where it applies (R-P2).
-- Measures of one column are cached under the id of the whole dataset (``_Active``), so
-  leaving columns out reuses them; only the counts over whole rows are recomputed.
-- Tables and charts receive aggregates or capped rows, never the whole dataset (R-E3, R-V2).
+"""Columns tab of the Profile page: an overview with one row per column, one table per
+semantic type, and the inspector of the column whose row is selected.
 """
 
-import dataclasses
-import importlib.metadata
-from datetime import datetime
 from typing import Any
 
 import pandas as pd
@@ -27,39 +9,11 @@ import streamlit as st
 
 from litmetrics.config import ProfileConfig
 from litmetrics.core import columns as cols
-from litmetrics.core import report
-from litmetrics.core.io.base import LoadedDataset
-from litmetrics.core.profile import (
-    BaseProfile,
-    CorrelationMethod,
-    CorrelationResult,
-    Issue,
-    IssueKind,
-    detect_issues,
-    missing_by_column,
-    top_correlated_pairs,
-)
-from litmetrics.core.sampling import SAMPLE_SEED
-from litmetrics.core.schema import IDENTIFIER_MIN_DISTINCT, Schema, SemanticType, drop_columns
-from litmetrics.ui import cache, charts, echarts, reading, skip, state, style, tables, text, theme
+from litmetrics.core.schema import SemanticType
+from litmetrics.ui import cache, charts, echarts, state, text, theme
+from litmetrics.ui.pages.profile import shared
 
 _CFG = ProfileConfig
-
-_ISSUES_TAB = ":material/warning: Issues"
-_COLUMNS_TAB = ":material/view_column: Columns"
-_MISSING_TAB = ":material/block: Missing values"
-_CORRELATION_TAB = ":material/link: Correlation"
-
-_METHODS: dict[str, CorrelationMethod] = {"Pearson": "pearson", "Spearman": "spearman"}
-
-# How each kind of issue is shown: label, Streamlit badge color and Material icon.
-_ISSUE_STYLE: dict[IssueKind, tuple[str, str, str]] = {
-    IssueKind.HIGH_MISSING: ("Missing values", "red", "block"),
-    IssueKind.DUPLICATE_ROWS: ("Duplicates", "orange", "content_copy"),
-    IssueKind.CONSTANT: ("Constant", "gray", "horizontal_rule"),
-    IssueKind.POSSIBLE_ID: ("Possible id", "violet", "key"),
-    IssueKind.HIGH_CORRELATION: ("Correlated", "blue", "link"),
-}
 
 # Views of the Columns tab: the semantic types each one covers, and its Material icon.
 _VIEWS: dict[str, tuple[tuple[SemanticType, ...], str]] = {
@@ -85,8 +39,6 @@ _NUMERIC_DEFAULT_GROUPS = ["Position", "Outliers"]
 _HEADER_PX = 36
 # Height of the small charts of the date and text column inspectors.
 _CHART_HEIGHT = "200px"
-# Height of the charts of the Missing values tab.
-_MISSING_CHART_HEIGHT = "300px"
 # Height of the histogram / boxplot of the numeric column inspector.
 _INSPECT_CHART_HEIGHT = "240px"
 # Material icon of each chart of the numeric column inspector.
@@ -147,177 +99,13 @@ _REPEATED_HELP = "Rows whose value appears more than once"
 _NAME_COLUMN = "column"
 
 
-def profile_page() -> None:
-    """Entry point registered in app.py."""
-    style.page_header("Profile", "An overall description of the data.")
-    dataset = state.get_dataset()
-    dataset_id = state.get_dataset_id()
-    if dataset is None or dataset_id is None:
-        st.info("Load a file in the Load page to see its profile.")
-        return
-
-    skip.skip_selector(state.require_schema())
-    # From here on, the dataset without the skipped columns.
-    active = _active()
-    if not active.schema.columns:
-        st.info("Every column is skipped. Remove some from the list to see their profile.")
-        return
-    _summary(active)
-    # on_change="rerun": only the open tab runs (R-E1).
-    issues, columns, missing, correlation = st.tabs(
-        [_ISSUES_TAB, _COLUMNS_TAB, _MISSING_TAB, _CORRELATION_TAB],
-        on_change="rerun",
-        key=state.widget_key("profile_tab"),
-    )
-    if issues.open:
-        with issues:
-            _issues()
-    if columns.open:
-        with columns:
-            _columns()
-    if missing.open:
-        with missing:
-            _missing(active)
-    if correlation.open:
-        with correlation:
-            _correlation()
-
-
-# Components
-
-
-def _summary(active: _Active) -> None:
-    """Headline quality numbers, from the base pass every tab starts from."""
-    dataset = active.view
-    base = cache.base_profile(active.view_id, dataset.df)
-    columns = f"{dataset.n_cols} columns"
-    if skipped := len(state.get_skipped_columns()):
-        columns += f" ({skipped} skipped)"
-    st.caption(f"{text.md(dataset.name)} · {dataset.n_rows:,} rows · {columns}")
-    # Keyed container: styles.css turns these metrics into cards.
-    with st.container(key="headline"):
-        missing, rows, duplicates, constant, memory = st.columns(5)
-    for where, label, value, icon in (
-        (missing, "Missing cells", f"{base.missing_cells_pct:.1f}%", "block"),
-        (rows, "Rows with missing", f"{base.rows_with_missing:,}", "table_rows"),
-        (duplicates, "Duplicate rows", f"{base.duplicate_rows:,}", "content_copy"),
-        (constant, "Constant columns", base.constant_columns, "horizontal_rule"),
-        (memory, "Memory", text.format_bytes(base.memory_bytes), "memory"),
-    ):
-        where.metric(label, value, icon=f":material/{icon}:", border=True)
-
-
-# Issues
-
-
-@st.fragment
-def _issues() -> None:
-    """Problems worth looking at before analysing the data, with a filter by kind."""
-    active = _active()
-    schema = active.schema
-    # Always Pearson, whatever the method chosen in Correlation, so the list does not change
-    # when the user explores that tab. Same cache entry as Pearson there (R-P6).
-    corr = cache.correlation(
-        active.dataset_id,
-        active.dataset.df,
-        schema.names_of(cols.NUMERIC_TYPES),
-        "pearson",
-        _CFG.max_heatmap_columns,
-        _CFG.sample_rows,
-    )
-    # Duplicate rows depend on the columns left: the base pass of the view.
-    base = cache.base_profile(active.view_id, active.view.df)
-    issues = detect_issues(
-        base,
-        schema,
-        # Every pair, not only the top ones: none above the threshold may be left out.
-        top_correlated_pairs(corr.matrix),
-        high_missing_pct=_CFG.high_missing_pct,
-        high_correlation=_CFG.high_correlation,
-    )
-    _report_button(active, base, issues, corr)
-    if not issues:
-        st.success("No issues found.")
-    else:
-        # Legend and filter: one pill per kind found, with how many issues of that kind.
-        counts: dict[IssueKind, int] = {}
-        for issue in issues:
-            counts[issue.kind] = counts.get(issue.kind, 0) + 1
-        kinds = [kind for kind in _ISSUE_STYLE if kind in counts]
-        selected = st.pills(
-            "Filter issues",
-            kinds,
-            selection_mode="multi",
-            format_func=lambda kind: (
-                f":material/{_ISSUE_STYLE[kind][2]}: {_ISSUE_STYLE[kind][0]} ({counts[kind]})"
-            ),
-            label_visibility="collapsed",
-            key=state.widget_key("issue_filter"),
-        )
-        # Nothing selected shows everything. Grouped by kind, in the order of the legend.
-        with style.card("issues"):
-            for kind in selected or kinds:
-                for issue in (i for i in issues if i.kind == kind):
-                    where = " · ".join(f"`{c}`" for c in issue.columns)
-                    line = f"{where} — {issue.message}" if where else issue.message
-                    st.markdown(f"{_badge(kind)} {line}")
-    _about(_issues_help())
-
-
-def _report_button(
-    active: _Active, base: BaseProfile, issues: list[Issue], corr: CorrelationResult
-) -> None:
-    """Download of the issues as a Markdown report, with why each one matters and what to do.
-
-    The report is written only on click, in another thread (no rerun), from results already
-    computed: every value it needs is taken here, none is read from the session there.
-    """
-    view, skipped = active.view, state.get_skipped_columns()
-    part = reading.active_part()
-    settings = report.ReportSettings(
-        high_missing_pct=_CFG.high_missing_pct,
-        high_correlation=_CFG.high_correlation,
-        correlation_method="pearson",
-        sample_rows=corr.rows_used if corr.rows_used < view.n_rows else None,
-        seed=SAMPLE_SEED,
-        correlation_columns=len(corr.matrix),
-        numeric_columns=corr.numeric_columns,
-    )
-
-    def write() -> str:
-        return report.issues_report(
-            view,
-            base,
-            active.schema,
-            issues,
-            settings,
-            memory=text.format_bytes(base.memory_bytes),
-            generated_at=datetime.now(),
-            version=importlib.metadata.version("litmetrics"),
-            part=part,
-            skipped=skipped,
-        )
-
-    st.download_button(
-        "Download report",
-        data=write,
-        file_name=report.report_file_name(view.name, part),
-        mime=report.MIME,
-        # Downloading changes nothing in the app: no rerun.
-        on_click="ignore",
-        icon=":material/download:",
-        help="The issues as a Markdown file, with why each one matters and what to do about "
-        "it, and a summary of the dataset and its columns.",
-    )
-
-
 # Columns
 
 
 @st.fragment
-def _columns() -> None:
+def tab() -> None:
     """Overview of every column, or the table of one semantic type."""
-    active = _active()
+    active = shared.active()
     dataset_id, dataset, schema = active.dataset_id, active.dataset, active.schema
     sizes = {view: len(schema.names_of(kinds)) for view, (kinds, _) in _VIEWS.items()}
     # Only views that have columns in this dataset.
@@ -343,7 +131,7 @@ def _columns() -> None:
     elif view == "Numeric":
         table = cache.numeric_stats(dataset_id, df, names, _CFG.sample_rows, dataset.unparsed)
         selected = _numeric_table(_with_labels(table), key)
-        _sample_note(dataset, "Percentiles, IQR, skewness and kurtosis are")
+        shared.sample_note(dataset, "Percentiles, IQR, skewness and kurtosis are")
     elif view == "Categorical":
         selected = _categorical_table(cache.categorical_stats(dataset_id, df, names), key)
     elif view == "Dates":
@@ -352,15 +140,15 @@ def _columns() -> None:
     else:
         table = cache.text_stats(dataset_id, df, names, schema, _CFG.sample_rows)
         selected = _text_table(table, key)
-        _sample_note(dataset, "Lengths are")
+        shared.sample_note(dataset, "Lengths are")
     if selected is None:
         st.caption(":material/touch_app: Select a row to inspect that column.")
     else:
         _inspector(active, selected)
-    _about(_columns_help())
+    shared.about(_columns_help())
 
 
-def _overview(active: _Active) -> str | None:
+def _overview(active: shared.Active) -> str | None:
     """One short row per column.
 
     Returns:
@@ -417,11 +205,11 @@ def _overview(active: _Active) -> str | None:
             ),
         },
     )
-    _sample_note(dataset, "Histograms and text lengths are")
+    shared.sample_note(dataset, "Histograms and text lengths are")
     return _selected_column(table, event)
 
 
-def _inspector(active: _Active, name: str) -> None:
+def _inspector(active: shared.Active, name: str) -> None:
     """Everything about one column, laid out for its semantic type.
 
     Only that column is computed (``cache.inspect_column``), not the table of its type.
@@ -432,7 +220,7 @@ def _inspector(active: _Active, name: str) -> None:
     base = cache.base_profile(dataset_id, df).by_column.loc[name]
     # Keyed: styles.css gives the inspector a shadow.
     with st.container(border=True, key="inspector"):
-        st.subheader(name, anchor=False)
+        st.subheader(text.md(name), anchor=False)
         st.caption(
             f"{kind.value} · pandas type `{df[name].dtype}` · {base['missing_pct']:.1f}% missing"
         )
@@ -458,7 +246,7 @@ def _inspector(active: _Active, name: str) -> None:
         else:
             _inspect_text(name, kind, table.iloc[0], detail)
         if kind not in cols.CATEGORICAL_TYPES:
-            _sample_note(dataset, "Charts are")
+            shared.sample_note(dataset, "Charts are")
 
 
 def _inspect_numeric(name: str, stats: pd.Series, detail: cols.ColumnDetail) -> None:
@@ -598,7 +386,7 @@ def _top_values(name: str, detail: cols.ColumnDetail) -> None:
     """Spelling variants, if any, and the most common values as horizontal bars."""
     if detail.variants:
         listed = "\n".join(
-            f"- {' / '.join(f'`{v!r}`' for v in group)}" for group in detail.variants[:5]
+            f"- {' / '.join(text.code(repr(v)) for v in group)}" for group in detail.variants[:5]
         )
         st.warning(f"Same value written in different ways:\n{listed}", icon=":material/spellcheck:")
     bars = detail.bars
@@ -806,141 +594,6 @@ def _selected_column(table: pd.DataFrame, event: Any) -> str | None:
     return str(table.iloc[event.selection.rows[0]][_NAME_COLUMN])
 
 
-# Missing values
-
-
-def _missing(active: _Active) -> None:
-    """Where the missing values are: by column, by row and a sample of incomplete rows."""
-    dataset_id, dataset = active.view_id, active.view
-    base = cache.base_profile(dataset_id, dataset.df)
-    by_column = missing_by_column(base)
-    if by_column.empty:
-        st.success("No missing values.")
-        _about(_MISSING_HELP)
-        return
-
-    by_col, by_row = st.columns(2)
-    with by_col, style.card("missing_by_column"):
-        st.markdown("**By column**")
-        # Sorted by missing values: the cap keeps the most incomplete columns.
-        shown = by_column.head(_CFG.missing_chart_columns)
-        caption = "% of missing values"
-        if len(shown) < len(by_column):
-            caption += f". The {len(shown)} most incomplete of {len(by_column)} columns."
-        st.caption(caption)
-        echarts.show(
-            charts.bar_options(
-                [str(c) for c in shown["column"]],
-                [round(float(v), 2) for v in shown["missing_pct"]],
-                theme.chart_colors(),
-                unit="%",
-            ),
-            height=_MISSING_CHART_HEIGHT,
-            key="profile_missing_by_column",
-        )
-    with by_row, style.card("missing_per_row"):
-        st.markdown("**Per row**")
-        st.caption("Rows by number of missing values")
-        per_row = base.missing_per_row
-        echarts.show(
-            charts.bar_options(
-                [str(n) for n in per_row["missing_in_row"]],
-                [int(n) for n in per_row["rows"]],
-                theme.chart_colors(),
-            ),
-            height=_MISSING_CHART_HEIGHT,
-            key="profile_missing_per_row",
-        )
-
-    n = _CFG.missing_rows_preview
-    with st.expander(f"Rows with missing values (first {n})"):
-        st.dataframe(tables.for_display(cache.rows_with_missing(dataset_id, dataset.df, n)))
-    _about(_MISSING_HELP)
-
-
-# Correlation
-
-
-@st.fragment
-def _correlation() -> None:
-    """Correlation heatmap of the numeric columns and the strongest pairs."""
-    active = _active()
-    dataset = active.dataset
-    label = st.radio("Method", list(_METHODS), horizontal=True, key=state.widget_key("corr_method"))
-    result = cache.correlation(
-        active.dataset_id,
-        dataset.df,
-        active.schema.names_of(cols.NUMERIC_TYPES),
-        _METHODS[label],
-        _CFG.max_heatmap_columns,
-        _CFG.sample_rows,
-    )
-    if result.matrix.empty:
-        st.info("At least two numeric columns with more than one value are needed.")
-        _about(_CORRELATION_HELP)
-        return
-    if result.numeric_columns > len(result.matrix):
-        st.caption(
-            f"Showing {len(result.matrix)} of {result.numeric_columns} numeric columns "
-            "(the ones with fewest missing values)."
-        )
-    if result.rows_used < dataset.n_rows:
-        st.caption(
-            f":material/info: {label} computed on {result.rows_used:,} of "
-            f"{dataset.n_rows:,} rows (random sample)."
-        )
-
-    if len(result.matrix) >= _CFG.heatmap_full_width_columns:
-        # Many columns: full width, so the numbers fit in the cells; the pairs go below.
-        heatmap, pairs = st.container(), st.container()
-    else:
-        heatmap, pairs = st.columns([3, 2])
-    with heatmap, style.card("correlation_heatmap"):
-        echarts.show(
-            charts.heatmap_options(result.matrix, theme.chart_colors()),
-            height=charts.heatmap_height(len(result.matrix)),
-            key="profile_correlation_heatmap",
-        )
-    with pairs:
-        st.markdown("**Most correlated pairs**")
-        st.dataframe(
-            top_correlated_pairs(result.matrix, _CFG.top_pairs),
-            hide_index=True,
-            column_config={
-                "column_a": st.column_config.TextColumn("Column A"),
-                "column_b": st.column_config.TextColumn("Column B"),
-                "correlation": st.column_config.NumberColumn("Correlation", format="%+.2f"),
-            },
-        )
-    _about(_CORRELATION_HELP)
-
-
-# Help texts
-
-
-def _issues_help() -> str:
-    return f"""
-Problems worth checking before analysing the data. Each one has a colored badge; click the
-buttons above the list to show only some kinds.
-
-- {_badge(IssueKind.HIGH_MISSING)} More than {_CFG.high_missing_pct:g}% of the values of a
-  column are missing. The column carries little information, and any result computed from it
-  rests on a small part of the rows.
-- {_badge(IssueKind.DUPLICATE_ROWS)} Some rows are exact copies of others. They can be a
-  loading error and they inflate counts, averages and the weight of those rows in a model.
-- {_badge(IssueKind.CONSTANT)} The column has a single value. It cannot explain any
-  difference between rows, so it can usually be dropped.
-- {_badge(IssueKind.POSSIBLE_ID)} (Almost) every value is different, at least
-  {IDENTIFIER_MIN_DISTINCT:.0%}: integers, or codes without spaces. Duplicated rows in a dirty
-  file repeat some ids, so a few repeats are allowed. It is probably a key such as a user or
-  order id: useful to join tables, not to compute statistics or train a model, where it would
-  only add noise. Dates and free text are not flagged, even if all distinct.
-- {_badge(IssueKind.HIGH_CORRELATION)} Two numeric columns have a Pearson correlation above
-  {_CFG.high_correlation:g} in absolute value. They probably measure the same thing, so one of
-  them may be redundant.
-"""
-
-
 def _columns_help() -> str:
     return f"""
 **Overview**: one row per column. *Type* is what the values mean (numeric, categorical, date,
@@ -966,105 +619,7 @@ exact.
 """
 
 
-_MISSING_HELP = """
-- **By column**: which columns are incomplete and how much.
-- **Per row**: whether the missing values are spread out or concentrated in a few rows.
-- **Rows with missing values**: a sample, to look for a pattern (same source, same dates...).
-
-Most statistics ignore missing values, but most models cannot use them. Before training a
-model, decide what to do with them: drop the rows or columns, or fill them in (with the
-median, the most frequent value, or a model). Each choice changes the results, so it is worth
-understanding first why the values are missing.
-"""
-
-_CORRELATION_HELP = """
-Measures how much two numeric columns move together, from -1 to +1.
-
-- **+1**: when one grows, the other always grows. **-1**: when one grows, the other always
-  falls. **0**: no relation of that kind.
-- **Pearson** measures straight-line relations and is sensitive to outliers. **Spearman**
-  works on the order of the values: it also catches relations that are not straight lines
-  (as long as they always go in the same direction) and is more robust to outliers. On large
-  datasets it is computed on a random sample.
-- Only numeric columns are compared. Identifiers (such as ``user_id``) are left out: they
-  often grow with the row order and would look correlated with anything that does too.
-- Correlation is not causation: two columns can move together because a third one drives
-  both, or by chance.
-- A correlation near 0 does not mean the columns are unrelated: a U-shaped relation gives
-  about 0 with both methods. Plot them in Visualization to check.
-- Strongly correlated inputs make some models (such as linear regression) unstable and hard
-  to interpret. Keeping only one of each pair is a common fix.
-"""
-
-
 # Helpers
-
-
-@dataclasses.dataclass(frozen=True, eq=False)
-class _Active:
-    """The active dataset, whole and without the skipped columns.
-
-    Attributes:
-        dataset_id: Id of the whole dataset. Key of the measures of one column, which do not
-            depend on the other columns: computed with ``dataset.df`` and reused whatever the
-            user skips.
-        dataset: The whole dataset.
-        view_id: Cache key of the dataset without the skipped columns (``cache.view_id``). Key
-            of what depends on the set of columns, such as duplicate rows.
-        view: The dataset without the skipped columns.
-        schema: Schema of ``view``: the columns the page describes.
-        view_tag: Short text that changes with the skipped columns, for widget keys.
-    """
-
-    dataset_id: str
-    dataset: LoadedDataset
-    view_id: str
-    view: LoadedDataset
-    schema: Schema
-    view_tag: str
-
-
-def _active() -> _Active:
-    """The active dataset, whole and without the skipped columns.
-
-    Fragments call it instead of receiving the data as arguments, so a fragment rerun always
-    sees the current dataset (R-E2).
-    """
-    dataset_id, dataset, schema = (
-        state.require_dataset_id(),
-        state.require_dataset(),
-        state.require_schema(),
-    )
-    skipped = state.get_skipped_columns()
-    if not skipped:
-        return _Active(dataset_id, dataset, dataset_id, dataset, schema, "all")
-    # No copy: the view shares the columns of the dataset.
-    df, view_schema = drop_columns(dataset.df, schema, skipped)
-    view_id = cache.view_id(dataset_id, skipped)
-    return _Active(
-        dataset_id,
-        dataset,
-        view_id,
-        dataclasses.replace(dataset, df=df),
-        view_schema,
-        view_id.removeprefix(f"{dataset_id}-skip-"),
-    )
-
-
-def _about(body: str) -> None:
-    """Collapsible explanation of a tab, for users new to data profiling."""
-    with st.expander("About this tab", icon=":material/help:"):
-        st.markdown(body)
-
-
-def _sample_note(dataset: LoadedDataset, what: str) -> None:
-    """Say that ``what`` was computed on a sample, if the dataset is larger than the sample."""
-    n = _CFG.sample_rows
-    if dataset.n_rows > n:
-        st.caption(
-            f":material/info: {what} computed on a random sample of up to {n:,} values "
-            f"per column ({dataset.n_rows:,} rows in the dataset)."
-        )
 
 
 def _now() -> pd.Timestamp:
@@ -1119,9 +674,3 @@ def _format_stat(key: str, value: Any) -> str:
     spec = fmt.removeprefix("%")
     sign = "+" if spec.startswith("+") else ""
     return format(value, f"{sign},{spec.removeprefix('+')}")
-
-
-def _badge(kind: IssueKind) -> str:
-    """Markdown for the colored badge of an issue kind."""
-    label, color, icon = _ISSUE_STYLE[kind]
-    return f":{color}-badge[:material/{icon}: {label}]"

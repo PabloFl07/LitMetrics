@@ -7,7 +7,7 @@ chart, its notes and the data behind it. Filters are a list the person adds to, 
 on any column with two values or more, drawn in the chart or not.
 
 How it stays fast (docs/performance.md, section Visualization):
-- Data and look are apart (R-V1): ``core/visualize.py`` aggregates what ``DataSpec`` says,
+- Data and look are apart (R-V1): ``core/visualize/`` aggregates what ``DataSpec`` says,
   cached in ``cache.chart_data`` (R-V3, filters included: R-V8); ``ui/chart_style.py`` builds
   the option from it and ``StyleSpec`` on every run, without touching pandas.
 - The editor and the chart are one ``st.fragment`` (R-V4), drawn with one chart key (R-V5).
@@ -896,7 +896,8 @@ def _config_messages() -> None:
     """What the last configuration load said: shown once."""
     show = {"error": st.error, "warning": st.warning, "success": st.success}
     for level, message in state.pop_chart_config_messages():
-        show[level](message)
+        # Messages quote column and file names: drawn as written.
+        show[level](text.md(message))
 
 
 # Chart
@@ -910,13 +911,13 @@ def _chart(
     try:
         data = cache.chart_data(dataset_id, df, spec)
     except ValueError as e:
-        st.warning(str(e))
+        st.warning(text.md(e))
         return
     data_ms = (time.perf_counter() - start) * 1000
     if not data.series:
         st.info("Nothing to draw: no row is left with a value in every column chosen.")
         if data.notes:
-            st.caption(" ".join(f":material/info: {n}" for n in data.notes))
+            st.caption(" ".join(f":material/info: {text.md(n)}" for n in data.notes))
         return
     start = time.perf_counter()
     option = look.build_option(data, chart_style, theme.chart_colors())
@@ -924,7 +925,7 @@ def _chart(
     # One key for every chart (R-V5): changing parameters updates it instead of remounting it.
     echarts.show(option, key="viz_chart", height=f"{chart_style.height}px")
     if data.notes:
-        st.caption(" ".join(f":material/info: {n}" for n in data.notes))
+        st.caption(" ".join(f":material/info: {text.md(n)}" for n in data.notes))
     # The expander reports whether it is open (``on_change="rerun"``) and only builds its
     # content then. Collapsed, Streamlit still sends and renders what is inside: a 10,000 point
     # scatter was a 390 KB CSV and its table on every click of any control.

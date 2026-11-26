@@ -1,5 +1,5 @@
 """Integration tests of the Visualization page through AppTest: the editor with its real state
-(``ui/state.py``), cache (``ui/cache.py``), data (``core/visualize.py``) and look
+(``ui/state.py``), cache (``ui/cache.py``), data (``core/visualize/``) and look
 (``ui/chart_style.py``), on ``samples.chart_frame``.
 
 AppTest does not run the chart's JavaScript: what is checked is the editor, the notes and the
@@ -36,7 +36,7 @@ def test_every_kind_renders():
     """Every chart kind draws from the picker, with its own editor.
 
     Case: one kind raises in the page (an option its widgets do not have, a stale column).
-    Affects: ui/pages/visualize.py, ui/cache.py (chart_data), core/visualize.py,
+    Affects: ui/pages/visualize.py, ui/cache.py (chart_data), core/visualize/,
     ui/chart_style.py
     How: picks each kind in turn and checks it stays picked.
     """
@@ -220,7 +220,7 @@ def test_row_numbers_and_ids_are_not_offered_as_axes():
     """Row numbers and ids never become an axis, a value or a split.
 
     Case: ``row`` / ``id`` become axes, now that the filters list them.
-    Affects: ui/pages/visualize.py (_data_controls), core/visualize.py (column_hints)
+    Affects: ui/pages/visualize.py (_data_controls), core/visualize/ (column_hints)
     How: checks every column selector of the bar chart editor.
     """
     at = _pick(_start(), K.BAR)
@@ -235,7 +235,7 @@ def test_filters_are_cards_on_any_column_and_can_be_removed():
     Case: only one filter of each type fits, columns that are no axis (free text, row
     numbers) cannot filter, or removing one filter drops the others.
     Affects: ui/pages/visualize.py (_filters, _filter_card, _add_filter, _remove_filter),
-    ui/state.py (chart filters), core/visualize.py (column_hints, _filter_mask)
+    ui/state.py (chart filters), core/visualize/ (column_hints, _filter_mask)
     How: adds a filter on ``city`` values and one on a ``row`` range, then removes the first.
     """
     at = _pick(_start(), K.BAR)

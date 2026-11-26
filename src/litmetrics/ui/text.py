@@ -15,11 +15,30 @@ import re
 # ``-``, ``#``) only mean something at the start of a line or after a link, and names are
 # never there. CommonMark lets a backslash escape any of them.
 _MARKDOWN_SPECIAL = re.compile(r"([\\`*_~\[\]$<>:])")
+# Runs of backticks inside a name: inline code needs a longer fence around them.
+_BACKTICKS = re.compile(r"`+")
 
 
 def md(name: object) -> str:
-    """``name`` as Markdown that shows it exactly as written."""
+    """``name`` as Markdown that shows it exactly as written. Also for whole messages that
+    quote names (``ReadError``, chart notes): they hold no Markdown of their own.
+    """
     return _MARKDOWN_SPECIAL.sub(r"\\\1", str(name))
+
+
+def code(name: object) -> str:
+    """``name`` as inline code, shown exactly as written even when it holds backticks.
+
+    Inside a code span nothing is read as Markdown, but a backtick in the name would close
+    it: the fence is one backtick longer than the longest run in the name, with spaces so a
+    backtick at either end is not taken as part of the fence (CommonMark).
+    """
+    value = " ".join(str(name).splitlines())
+    longest = max((len(run) for run in _BACKTICKS.findall(value)), default=0)
+    if not longest:
+        return f"`{value}`"
+    fence = "`" * (longest + 1)
+    return f"{fence} {value} {fence}"
 
 
 def format_bytes(n: int) -> str:

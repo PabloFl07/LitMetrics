@@ -89,6 +89,19 @@ def test_read_error_is_shown_and_no_dataset_is_set():
     assert at.session_state["dataset"] is None
 
 
+def test_read_error_shows_the_file_name_as_written():
+    """The error of a file whose name Markdown would read quotes that name as written.
+
+    Case: ``ReadError`` messages quote the file name and are drawn as Markdown, so
+    ``*draft*_v1.csv`` shows in italics.
+    Affects: ui/pages/load.py (_load), ui/text.py (md)
+    How: uploads ``EMPTY_CSV`` as ``*draft*_v1.csv`` and reads the Markdown of the error.
+    """
+    at = upload(start_app(), "*draft*_v1.csv", samples.EMPTY_CSV)
+    assert not at.exception, errors(at)
+    assert at.error[0].value == r"'\*draft\*\_v1.csv' is empty."
+
+
 def test_failed_upload_is_not_read_again_on_reruns():
     """After a failed read, reruns show the error without reading the file again.
 

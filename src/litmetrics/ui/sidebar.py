@@ -92,7 +92,7 @@ def _part_switcher() -> None:
         on_change=_on_part_switch,
     )
     if (error := reading.part_error()) is not None:
-        st.error(error)
+        st.error(text.md(error))
 
 
 def _part_label(name: str, description: str | None) -> str:

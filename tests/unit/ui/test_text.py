@@ -44,6 +44,29 @@ def test_md_accepts_any_value():
 
 
 @pytest.mark.parametrize(
+    ("name", "expected"),
+    [
+        ("*price*", "`*price*`"),
+        ("a`b", "`` a`b ``"),
+        ("x``y`", "``` x``y` ```"),
+        ("`quoted`", "`` `quoted` ``"),
+        ("two\nlines", "`two lines`"),
+    ],
+    ids=["plain", "one-backtick", "longest-run", "ends", "line-break"],
+)
+def test_code_keeps_names_with_backticks_in_one_span(name, expected):
+    """A name in inline code shows whole, even when it holds backticks.
+
+    Case: a column named ``a`b`` closes the code span early and the rest of the line is read
+    as Markdown (Issues list, spelling variants of the inspector).
+    Affects: ui/text.py (code)
+    How: wraps names with no backtick, one, a run of two, backticks at both ends and a line
+    break, and checks the fence is longer than any run inside.
+    """
+    assert text.code(name) == expected
+
+
+@pytest.mark.parametrize(
     ("n", "expected"),
     [(512, "512 B"), (1536, "1.5 KB"), (5 * 1024**2, "5.0 MB"), (3 * 1024**3, "3.0 GB")],
 )

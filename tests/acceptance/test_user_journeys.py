@@ -41,7 +41,7 @@ def test_analyst_loads_a_spanish_export_and_sees_its_problems(app: Page, tmp_pat
 
     Case: any step of the main flow breaks for the files most of our users have: wrong
     separator (one column), mangled accents, numbers read as text, or issues not reported.
-    Affects: app.py, ui/pages/load.py, ui/pages/profile.py, ui/sidebar.py, core/io/sniffing.py,
+    Affects: app.py, ui/pages/load.py, ui/pages/profile/page.py, ui/sidebar.py, core/io/sniffing.py,
     core/io/csv_loader.py, core/schema.py, core/profile.py
     How: uploads ``SALES_EXPORT_CSV`` and reads metrics, captions, the preview and the issues.
     """
@@ -78,7 +78,7 @@ def test_analyst_downloads_the_issues_report(app: Page, tmp_path):
 
     Case: the function given to the download button fails when clicked (it runs in another
     thread, which AppTest never runs), or the report is not the one of the dataset shown.
-    Affects: ui/pages/profile.py (_report_button), core/report.py, core/profile.py
+    Affects: ui/pages/profile/page.py (_report_button), core/report.py, core/profile.py
     How: uploads ``SALES_EXPORT_CSV``, catches the download of the Issues tab and reads it.
     """
     page = app
@@ -110,7 +110,7 @@ def test_analyst_switches_tables_of_a_database_from_any_page(app: Page, tmp_path
     Case: the table chosen in the sidebar is only read on the Load page, so Profile keeps
     describing the previous table without saying so.
     Affects: app.py (read_chosen_part before the page), ui/sidebar.py, ui/reading.py,
-    ui/pages/load.py, ui/pages/profile.py, core/io/sqlite_loader.py
+    ui/pages/load.py, ui/pages/profile/page.py, core/io/sqlite_loader.py
     How: uploads ``TOWN_DB``, switches table in the sidebar on Profile, checks both pages.
     """
     page = app
@@ -166,7 +166,7 @@ def test_analyst_goes_back_to_an_earlier_file_without_uploading_it(app: Page, tm
     Case: the list of datasets in memory is not shared with the sidebar, or picking one does
     not change what the page shows.
     Affects: ui/sidebar.py (_dataset_switcher), ui/cache.py, core/io/library.py,
-    ui/pages/profile.py
+    ui/pages/profile/page.py
     How: uploads ``CSV_A`` and ``CSV_B``, switches to ``first.csv`` on Profile.
     """
     page = app
@@ -192,7 +192,7 @@ def test_correlation_heatmap_is_drawn(app: Page, tmp_path):
 
     Case: the chart option is valid Python but not valid for ECharts (NaN, numpy types), or
     the component fails to load: AppTest cannot see either, only a browser can.
-    Affects: ui/pages/profile.py (_correlation), ui/charts.py (heatmap_options),
+    Affects: ui/pages/profile/page.py (_correlation), ui/charts.py (heatmap_options),
     ui/echarts.py, streamlit-echarts
     How: uploads ``PEOPLE_CSV``, opens Correlation and waits for the canvas inside the chart's
     container (key ``profile_correlation_heatmap``) to be drawn at the heatmap's height. The
@@ -295,7 +295,7 @@ def test_analyst_builds_a_chart_in_visualization(app: Page, tmp_path):
     Case: the page is not registered or breaks on a real upload, or an option of the chart
     builder is valid Python but not valid ECharts (AppTest cannot see that, a browser can).
     Affects: app.py (build_pages), ui/pages/visualize.py, ui/chart_style.py, ui/cache.py,
-    core/visualize.py, ui/echarts.py, streamlit-echarts
+    core/visualize/, ui/echarts.py, streamlit-echarts
     How: uploads ``chart_csv``, opens Visualization, waits for the canvas of the chart (key
     ``viz_chart``), clicks the "Scatter" pill and waits for it again.
     """

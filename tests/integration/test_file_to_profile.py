@@ -143,7 +143,7 @@ def test_issues_of_a_file_are_found_end_to_end():
     a category the issue detector skips), so a problem in the file is not reported.
     Affects: core/io (CSV path), core/schema.py, core/profile.py (base_profile,
     correlation_matrix, detect_issues)
-    How: reads ``QUALITY_CSV`` and runs the issue detection as ui/pages/profile.py does.
+    How: reads ``QUALITY_CSV`` and runs the issue detection as ui/pages/profile/page.py does.
     """
     dataset, schema = _read("quality.csv", samples.QUALITY_CSV)
     numeric = schema.names_of(cols.NUMERIC_TYPES)
@@ -170,7 +170,7 @@ def test_issues_report_of_a_file_lists_its_issues_by_severity():
     Affects: core/io (CSV path), core/schema.py, core/profile.py (detect_issues, ISSUE_INFO),
     core/report.py
     How: reads ``ORDERS_WITH_TYPOS_CSV`` with a duplicated row added, finds its issues as
-    ui/pages/profile.py does and reads the summary table and the sections of the report.
+    ui/pages/profile/page.py does and reads the summary table and the sections of the report.
     """
     rows = samples.ORDERS_WITH_TYPOS_CSV.splitlines()
     data = b"\n".join([*rows, rows[1], b""])
